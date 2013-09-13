@@ -11,6 +11,45 @@ local random = util.inline(terralib.includecstring([[
 ]]).random_)
 
 
+-- Turning templated functions into overloaded ones
+local fns = {}
+local function addfunction(name, fn, numtypeparms)
+	table.insert(fns, {name = name, fn = fn, nump = numtypeparms})
+end
+local function genOverloads()
+	local results = {}
+	for _,fndata in ipairs(fns) do
+		if fndata.nump == 0 then
+			results[fndata.name] = fndata.fn
+		else
+			-- Generate one specialization for every possible
+			-- parameter combination.
+			local overallfn = nil
+			local numVariants = 2 ^ fndata.nump
+			local bitstring = 0
+			for i=1,numVariants do
+				local types = {}
+				for j=0,fndata.nump-1 do
+					if bit.band(bit.tobit(2^j), bit.tobit(bitstring)) == 0 then
+						table.insert(types, double)
+					else
+						table.insert(types, ad.num)
+					end
+				end
+				local fn = fndata.fn(unpack(types))
+				if not overallfn then
+					overallfn = fn
+				else
+					overallfn:adddefinition(fn:getdefinitions()[1])
+				end
+			end
+			results[fndata.name] = overallfn
+		end
+	end
+	return results
+end
+
+
 -- Samplers/scorers
 
 local flip_sample = templatize(function(p: T)
@@ -21,9 +60,10 @@ local flip_sample = templatize(function(p: T)
 		return 0
 	end
 end)
+addfunction("flip_sample", flip_sample, 1) 
 
 local flip_logprob = templatize(function(T)
-	return terra(val: int, p: T2)
+	return terra(val: int, p: T)
 		var prob: T
 		if val ~= 0 then
 			prob = p
@@ -33,6 +73,7 @@ local flip_logprob = templatize(function(T)
 		return ad.math.log(prob)
 	end
 end)
+addfunction("flip_logprob", flip_logprob, 1)
 
 local multinomial_sample = templatize(function(T)
 	return terra(params: Vector(T))
@@ -48,6 +89,7 @@ local multinomial_sample = templatize(function(T)
 		return result - 1
 	end
 end)
+addfunction("multinomial_sample", multinomial_sample, 1)
 
 local multinomial_logprob = templatize(function(T)
 	return terra(val: int, params: Vector(T))
@@ -61,7 +103,7 @@ local multinomial_logprob = templatize(function(T)
 		return ad.math.log(params:get(val)/sum)
 	end
 end)
-
+addfunction("multinomial_logprob", multinomial_logprob, 1)
 
 local uniform_sample = templatize(function(T1, T2)
 	return terra(lo: T1, hi: T2)
@@ -69,6 +111,7 @@ local uniform_sample = templatize(function(T1, T2)
 		return (1.0-u)*lo + u*hi
 	end
 end)
+addfunction("uniform_sample", uniform_sample, 2)
 
 local uniform_logprob = templatize(function(T1, T2, T3)
 	return terra(val: T1, lo: T2, hi: T3)
@@ -76,7 +119,7 @@ local uniform_logprob = templatize(function(T1, T2, T3)
 		return -ad.math.log(hi - lo)
 	end
 end)
-
+addfunction("uniform_logprob", uniform_logprob, 3)
 
 local gaussian_sample = templatize(function(T1, T2)
 	return terra(mu: T1, sigma: T2)
@@ -91,6 +134,7 @@ local gaussian_sample = templatize(function(T1, T2)
 		return mu + sigma*v/u
 	end
 end)
+addfunction("gaussian_sample", gaussian_sample, 2)
 
 local gaussian_logprob = templatize(function(T1, T2, T3)
 	return terra(x: T1, mu: T2, sigma: T3)
@@ -98,6 +142,7 @@ local gaussian_logprob = templatize(function(T1, T2, T3)
 		return -.5*(1.8378770664093453 + 2*ad.math.log(sigma) + xminusmu*xminusmu/(sigma*sigma))
 	end
 end)
+addfunction("gaussian_logprob", gaussian_logprob, 3)
 
 local gamma_sample = templatize(function(T1, T2)
 	local terra sample(a: T1, b: T2)
@@ -119,6 +164,7 @@ local gamma_sample = templatize(function(T1, T2)
 	end
 	return sample
 end)
+addfunction("gamma_sample", gamma_sample, 2)
 
 local gamma_cof = global(double[6], {76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5})
 local log_gamma = templatize(function(T)
@@ -140,7 +186,7 @@ local gamma_logprob = templatize(function(T1, T2, T3)
 		return (a - 1.0)*ad.math.log(x) - x/b - log_gamma.implicit(a) - a*ad.math.log(b)
 	end
 end)
-
+addfunction("gamma_logprob", gamma_logprob, 3)
 
 local beta_sample = templatize(function(T1, T2)
 	return terra(a: T1, b: T2)
@@ -148,6 +194,7 @@ local beta_sample = templatize(function(T1, T2)
 		return x / (x + gamma_sample.implicit(b, 1))
 	end
 end)
+addfunction("beta_sample", beta_sample, 2)
 
 local log_beta = templatize(function(T1, T2)
 	return terra(a: T1, b: T2)
@@ -164,7 +211,7 @@ local beta_logprob = templatize(function(T1, T2, T3)
 		end
 	end
 end)
-
+addfunction("beta_logprob", beta_logprob, 3)
 
 local binomial_sample = templatize(function(T)
 	return terra (p: T, n: int) : int
@@ -192,6 +239,7 @@ local binomial_sample = templatize(function(T)
 		return k
 	end
 end)
+addfunction("binomial_sample", binomial_sample, 0)
 
 local g = templatize(function(T)
 	return terra(x: T)
@@ -222,7 +270,7 @@ local binomial_logprob = templatize(function(T)
 		return gaussian_logprob.implicit(z, 0.0, 1.0) + ad.math.log(invsd)
 	end
 end)
-
+addfunction("binomial_logprob", binomial_logprob, 1)
 
 -- Do we need to templatize this to be in line with all the other functions?
 local terra poisson_sample(mu: int)
@@ -247,7 +295,7 @@ local terra poisson_sample(mu: int)
 	end
 	return k-1
 end
-
+addfunction("poisson_sample", poisson_sample, 0)
 
 local terra fact(x: int)
 	var t:int = 1
@@ -257,7 +305,6 @@ local terra fact(x: int)
 	end
 	return t	
 end
-
 
 local terra lnfact(x: int)
 	if x < 1 then x = 1 end
@@ -274,11 +321,10 @@ local terra lnfact(x: int)
 	return ssum
 end
 
-
 local terra poisson_logprob(k: int, mu: int)
 	return k * ad.math.log(mu) - mu - lnfact(k)
 end
-
+addfunction("poisson_logprob", poisson_logprob, 0)
 
 local dirichlet_sample = templatize(function(T)
 	return terra(params: Vector(T))
@@ -295,6 +341,7 @@ local dirichlet_sample = templatize(function(T)
 		return result
 	end
 end)
+addfunction("dirichlet_sample", dirichlet_sample, 1)
 
 local dirichlet_logprob = templatize(function(T1, T2)
 	return terra logprob(theta: Vector(T1), params: Vector(T2))
@@ -309,9 +356,12 @@ local dirichlet_logprob = templatize(function(T1, T2)
 		return logp
 	end
 end)
+addfunction("dirichlet_logprob", dirichlet_logprob, 2)
+
 
 
 -- Module exports
+--return genOverloads()
 return
 {
 	flip_sample = flip_sample,
@@ -333,6 +383,7 @@ return
 	dirichlet_sample = dirichlet_sample,
 	dirichlet_logprob = dirichlet_logprob
 }
+
 
 
 
