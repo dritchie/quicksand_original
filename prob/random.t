@@ -13,58 +13,55 @@ local random = util.inline(terralib.includecstring([[
 
 -- Turning templated functions into overloaded ones
 local fns = {}
-local function addfunction(name, fn, numtypeparms)
-	table.insert(fns, {name = name, fn = fn, nump = numtypeparms})
-end
-local function genOverloads()
-	local results = {}
-	for _,fndata in ipairs(fns) do
-		if fndata.nump == 0 then
-			results[fndata.name] = fndata.fn
+local function specialize(name, numparams, fntemplate)
+	-- Templatize on the value type
+	fns[name] = templatize(function(V)
+		-- Generate overloads for all combinations of
+		-- parameter types.
+		if numparams == 0 then
+			return fntemplate(V)
 		else
-			-- Generate one specialization for every possible
-			-- parameter combination.
 			local overallfn = nil
-			local numVariants = 2 ^ fndata.nump
+			local numVariants = 2 ^ numparams
 			local bitstring = 0
 			for i=1,numVariants do
 				local types = {}
-				for j=0,fndata.nump-1 do
+				for j=0,numparams-1 do
 					if bit.band(bit.tobit(2^j), bit.tobit(bitstring)) == 0 then
 						table.insert(types, double)
 					else
 						table.insert(types, ad.num)
 					end
 				end
-				local fn = fndata.fn(unpack(types))
+				local fn = fntemplate(V, unpack(types))
 				if not overallfn then
 					overallfn = fn
 				else
 					overallfn:adddefinition(fn:getdefinitions()[1])
 				end
 			end
-			results[fndata.name] = overallfn
+			return overallfn
 		end
-	end
-	return results
+	end)
 end
 
 
 -- Samplers/scorers
 
-local flip_sample = templatize(function(p: T)
-	var randval = random()
-	if randval < p then
-		return 1
-	else
-		return 0
+specialize("flip_sample", 1, function(V, P)
+	terra(p: P)
+		var randval = random()
+		if randval < p then
+			return 1
+		else
+			return 0
+		end
 	end
 end)
-addfunction("flip_sample", flip_sample, 1) 
 
-local flip_logprob = templatize(function(T)
-	return terra(val: int, p: T)
-		var prob: T
+specialize("flip_logprob", 1, function(V, P)
+	return terra(val: int, p: P)
+		var prob: P
 		if val ~= 0 then
 			prob = p
 		else
@@ -73,11 +70,10 @@ local flip_logprob = templatize(function(T)
 		return ad.math.log(prob)
 	end
 end)
-addfunction("flip_logprob", flip_logprob, 1)
 
-local multinomial_sample = templatize(function(T)
-	return terra(params: Vector(T))
-		var sum = T(0.0)
+specialize("multinomial_sample", 1, function(V, P)
+	return terra(params: Vector(P))
+		var sum = P(0.0)
 		for i=0,params.size do sum = sum + params:get(i) end
 		var result: int = 0
 		var x = random() * sum
@@ -89,40 +85,36 @@ local multinomial_sample = templatize(function(T)
 		return result - 1
 	end
 end)
-addfunction("multinomial_sample", multinomial_sample, 1)
 
-local multinomial_logprob = templatize(function(T)
-	return terra(val: int, params: Vector(T))
+specialize("multinomial_logprob", 1, function(V, P)
+	return terra(val: int, params: Vector(P))
 		if val < 0 or val >= params.size then
 			return [-math.huge]
 		end
-		var sum = T(0.0)
+		var sum = P(0.0)
 		for i=0,params.size do
 			sum = sum + params:get(i)
 		end
 		return ad.math.log(params:get(val)/sum)
 	end
 end)
-addfunction("multinomial_logprob", multinomial_logprob, 1)
 
-local uniform_sample = templatize(function(T1, T2)
-	return terra(lo: T1, hi: T2)
+specialize("uniform_sample", 2, function(V, P1, P2)
+	return terra(lo: P1, hi: P2)
 		var u = random()
-		return (1.0-u)*lo + u*hi
+		return V((1.0-u)*lo + u*hi)
 	end
 end)
-addfunction("uniform_sample", uniform_sample, 2)
 
-local uniform_logprob = templatize(function(T1, T2, T3)
-	return terra(val: T1, lo: T2, hi: T3)
+specialize("uniform_logprob", 2, function(V, P1, P2)
+	return terra(val: V, lo: P1, hi: P2)
 		if val < lo or val > hi then return [-math.huge] end
 		return -ad.math.log(hi - lo)
 	end
 end)
-addfunction("uniform_logprob", uniform_logprob, 3)
 
-local gaussian_sample = templatize(function(T1, T2)
-	return terra(mu: T1, sigma: T2)
+specialize("gaussian_sample", 2, function(V, P1, P2)
+	return terra(mu: P1, sigma: P2)
 		var u:double, v:double, x:double, y:double, q:double
 		repeat
 			u = 1.0 - random()
@@ -131,40 +123,37 @@ local gaussian_sample = templatize(function(T1, T2)
 			y = ad.math.fabs(v) + 0.386595
 			q = x*x + y*(0.196*y - 0.25472*x)
 		until not(q >= 0.27597 and (q > 0.27846 or v*v > -4 * u * u * ad.math.log(u)))
-		return mu + sigma*v/u
+		return V(mu + sigma*v/u)
 	end
 end)
-addfunction("gaussian_sample", gaussian_sample, 2)
 
-local gaussian_logprob = templatize(function(T1, T2, T3)
-	return terra(x: T1, mu: T2, sigma: T3)
+specialize("gaussian_logprob", 2, function(V, P1, P2)
+	return terra(x: V, mu: P1, sigma: P2)
 		var xminusmu = x - mu
 		return -.5*(1.8378770664093453 + 2*ad.math.log(sigma) + xminusmu*xminusmu/(sigma*sigma))
 	end
 end)
-addfunction("gaussian_logprob", gaussian_logprob, 3)
 
-local gamma_sample = templatize(function(T1, T2)
-	local terra sample(a: T1, b: T2)
-		if a < 1.0 then return sample(1.0+a,b) * ad.math.pow(random(), 1.0/a) end
+specialize("gamma_sample", 2, function(V, P1, P2)
+	local terra sample(a: P1, b: P2)
+		if a < 1.0 then return V(sample(1.0+a,b) * ad.math.pow(random(), 1.0/a)) end
 		var x:double, v:T1, u:double
 		var d = a - 1.0/3.0
 		var c = 1.0/ad.math.sqrt(9.0*d)
 		while true do
 			repeat
-				x = gaussian_sample.implicit(0.0, 1.0)
+				x = [fns.gaussian_sample(V)](0.0, 1.0)
 				v = 1.0+c*x
 			until v > 0.0
 			v = v*v*v
 			u = random()
 			if (u < 1.0 - .331*x*x*x*x) or (ad.math.log(u) < .5*x*x + d*(1.0 - v + ad.math.log(v))) then
-				return b*d*v
+				return V(b*d*v)
 			end
 		end
 	end
 	return sample
 end)
-addfunction("gamma_sample", gamma_sample, 2)
 
 local gamma_cof = global(double[6], {76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5})
 local log_gamma = templatize(function(T)
@@ -181,20 +170,18 @@ local log_gamma = templatize(function(T)
 	end
 end)
 
-local gamma_logprob = templatize(function(T1, T2, T3)
-	return terra(x: T1, a: T2, b:T3)
+specialize("gamma_logprob", 2, function(V, P1, P2)
+	return terra(x: V, a: P1, b: P2)
 		return (a - 1.0)*ad.math.log(x) - x/b - log_gamma.implicit(a) - a*ad.math.log(b)
 	end
 end)
-addfunction("gamma_logprob", gamma_logprob, 3)
 
-local beta_sample = templatize(function(T1, T2)
-	return terra(a: T1, b: T2)
-		var x = gamma_sample.implicit(a, 1)
-		return x / (x + gamma_sample.implicit(b, 1))
+specialize("beta_sample", 2, function(V, P1, P2)
+	return terra(a: P1, b: P2)
+		var x = [fns.gamma_sample(V)](a, 1)
+		return V(x / (x + [fns.gamma_sample(V)](b, 1)))
 	end
 end)
-addfunction("beta_sample", beta_sample, 2)
 
 local log_beta = templatize(function(T1, T2)
 	return terra(a: T1, b: T2)
@@ -202,8 +189,8 @@ local log_beta = templatize(function(T1, T2)
 	end
 end)
 
-local beta_logprob = templatize(function(T1, T2, T3)
-	return terra(x: T1, a: T2, b: T3)
+specialize("beta_logprob", 2, function(V, P1, P2)
+	return terra(x: V, a: P1, b: P2)
 		if x > 0.0 and x < 1.0 then
 			return (a-1.0)*ad.math.log(x) + (b-1.0)*ad.math.log(1.0-x) - log_beta.implicit(a,b)
 		else
@@ -211,17 +198,16 @@ local beta_logprob = templatize(function(T1, T2, T3)
 		end
 	end
 end)
-addfunction("beta_logprob", beta_logprob, 3)
 
-local binomial_sample = templatize(function(T)
-	return terra (p: T, n: int) : int
+specialize("binomial_sample", 1, function(V, P)
+	return terra (p: P, n: int) : int
 		var k = 0
 		var N = 10
 		var a:int, b:int
 		while n > N do
 			a = 1 + n/2
 			b = 1 + n-a
-			var x = beta_sample.implicit(T(a), T(b))
+			var x = [fns.beta_sample(V)](P(a), P(b))
 			if x >= p then
 				n = a - 1
 				p = p / x
@@ -239,7 +225,6 @@ local binomial_sample = templatize(function(T)
 		return k
 	end
 end)
-addfunction("binomial_sample", binomial_sample, 0)
 
 local g = templatize(function(T)
 	return terra(x: T)
@@ -250,11 +235,11 @@ local g = templatize(function(T)
 	end
 end)
 
-local binomial_logprob = templatize(function(T)
+specialize("binomial_logprob", 1, function(V, P)
 	local inv2 = 1/2
 	local inv3 = 1/3
 	local inv6 = 1/6
-	return terra(s: int, p: T, n: int)
+	return terra(s: int, p: P, n: int)
 		if s >= n then return [-math.huge] end
 		var q = 1.0-p
 		var S = s + inv2
@@ -267,35 +252,32 @@ local binomial_logprob = templatize(function(T)
 		var z = num / den
 		var invsd = ad.math.sqrt(z)
 		z = d2 * invsd
-		return gaussian_logprob.implicit(z, 0.0, 1.0) + ad.math.log(invsd)
+		return [fns.gaussian_logprob(V)](z, 0.0, 1.0) + ad.math.log(invsd)
 	end
 end)
-addfunction("binomial_logprob", binomial_logprob, 1)
 
--- Do we need to templatize this to be in line with all the other functions?
-local terra poisson_sample(mu: int)
-	var k:int = 0
-	while mu > 10 do
-		var m = (7.0/8)*mu
-		var x = gamma_sample.implicit(m, 1.0)
-		if x > mu then
-			-- This implicit should work, despite binomial_sample technically only needing
-			-- the first template parameter
-			return k + binomial_sample.implicit(mu/x, m-1)
-		else
-			mu = mu - x
+specialize("poisson_sample", 0, function(V)
+	return terra(mu: int)
+		var k:int = 0
+		while mu > 10 do
+			var m = (7.0/8)*mu
+			var x = [fns.gamma_sample(V)](m, 1.0)
+			if x > mu then
+				return k + [fns.binomial_sample(V)](mu/x, m-1)
+			else
+				mu = mu - x
+				k = k + 1
+			end
+		end
+		var emu = ad.math.exp(-mu)
+		var p = 1.0
+		while p > emu do
+			p = p * random()
 			k = k + 1
 		end
+		return k-1
 	end
-	var emu = ad.math.exp(-mu)
-	var p = 1.0
-	while p > emu do
-		p = p * random()
-		k = k + 1
-	end
-	return k-1
-end
-addfunction("poisson_sample", poisson_sample, 0)
+end)
 
 local terra fact(x: int)
 	var t:int = 1
@@ -321,17 +303,18 @@ local terra lnfact(x: int)
 	return ssum
 end
 
-local terra poisson_logprob(k: int, mu: int)
-	return k * ad.math.log(mu) - mu - lnfact(k)
-end
-addfunction("poisson_logprob", poisson_logprob, 0)
+specialize("poisson_logprob", 0, function(V)
+	return terra(k: int, mu: int)
+		return k * ad.math.log(mu) - mu - lnfact(k)
+	end	
+end)
 
-local dirichlet_sample = templatize(function(T)
-	return terra(params: Vector(T))
-		var result = [Vector(T)].stackAlloc(params.size, T(0.0))
-		var ssum = T(0.0)
+specialize("dirichlet_sample", 1, function(V, P)
+	return terra(params: Vector(P))
+		var result = [Vector(V)].stackAlloc(params.size, V(0.0))
+		var ssum = V(0.0)
 		for i=0,params.size do
-			var t = gamma_sample.implicit(params:get(i), 1.0)
+			var t = [fns.gamma_sample(V)](params:get(i), 1.0)
 			result:set(i, t)
 			ssum = ssum + t
 		end
@@ -341,11 +324,10 @@ local dirichlet_sample = templatize(function(T)
 		return result
 	end
 end)
-addfunction("dirichlet_sample", dirichlet_sample, 1)
 
-local dirichlet_logprob = templatize(function(T1, T2)
-	return terra logprob(theta: Vector(T1), params: Vector(T2))
-		var sum = T2(0.0)
+specialize("dirichlet_logprob", 1, function(V, P)
+	return terra logprob(theta: Vector(V), params: Vector(P))
+		var sum = P(0.0)
 		for i=0,params.size do sum = sum + params:get(i) end
 		var logp = log_gamma.implicit(sum)
 		for i=0,params.size do
@@ -356,33 +338,10 @@ local dirichlet_logprob = templatize(function(T1, T2)
 		return logp
 	end
 end)
-addfunction("dirichlet_logprob", dirichlet_logprob, 2)
-
 
 
 -- Module exports
---return genOverloads()
-return
-{
-	flip_sample = flip_sample,
-	flip_logprob = flip_logprob,
-	multinomial_sample = multinomial_sample,
-	multinomial_logprob = multinomial_logprob,
-	uniform_sample = uniform_sample,
-	uniform_logprob = uniform_logprob,
-	gaussian_sample = gaussian_sample,
-	gaussian_logprob = gaussian_logprob,
-	gamma_sample = gamma_sample,
-	gamma_logprob = gamma_logprob,
-	beta_sample = beta_sample,
-	beta_logprob = beta_logprob,
-	binomial_sample = binomial_sample,
-	binomial_logprob = binomial_logprob,
-	poisson_sample = poisson_sample,
-	poisson_logprob = poisson_logprob,
-	dirichlet_sample = dirichlet_sample,
-	dirichlet_logprob = dirichlet_logprob
-}
+return fns
 
 
 
