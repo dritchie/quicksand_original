@@ -51,22 +51,26 @@ local RandVarWithVal = templatize(function(ValType)
 end)
 
 
--- Finally, at the bottom of the hierarchy, we have random primitives defined by a set of functions:
---    * A sampling function
+-- Finally, at the bottom of the hierarchy, we have random primitives defined by a set of functions
+--    * paramtypes: the types of the parameters to the ERP. Essentially tells us which overload of the sample
+--      sample function we are using.
+--    * A sampling function. It may be overloaded, but all overloads must have the same return type
 --    * A log probability function
 --    * (Optional) A proposal function
 --    * (Optional) A proposal log probability function
-local function RandVarFromFunctions(sample, logprobfn, propose, logProposalProb)
-	assert(#sample:getdefinitions()[1]:gettype().returns == 1)	-- Can't handle functions with multiple return values
+local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logProposalProb)
+	-- Can't handle functions with multiple return values
+	assert(#sample:getdefinitions()[1]:gettype().returns == 1)
+	-- All overloads of the sampling function must have the same return type
 	local ValType = sample:getdefinitions()[1]:gettype().returns[1]
-	local ParamTypes = sample:getdefinitions()[1]:gettype().parameters
+	for i=2,#sample:getdefinitions() do assert(sample:getdefinitions()[i]:gettype().returns[1] == ValType) end
 
 	-- If we don't have propose or logProposalProb functions, make macros for default
 	-- versions of these things given the functions we do have
 	if not propose then
 		-- Default: sample a new value irrespective of the current value (argument 1)
 		propose = macro(function(...)
-			local numargs = #ParamTypes + 1
+			local numargs = #paramtypes + 1
 			local args = {}
 			for i=2,numargs do
 				table.insert(args, select(i,...))
@@ -77,7 +81,7 @@ local function RandVarFromFunctions(sample, logprobfn, propose, logProposalProb)
 	if not logProposalProb then
 		-- Default: Score the proposed value irrespective of the current value
 		logProposalProb = macro(function(...)
-			local numargs = #ParamTypes + 2
+			local numargs = #paramtypes + 2
 			local args = {}
 			for i=2,numargs do
 				table.insert(args, select(i,...))
@@ -88,11 +92,11 @@ local function RandVarFromFunctions(sample, logprobfn, propose, logProposalProb)
 
 	-- Initialize the class we're building
 	local struct RandVarFromFunctionsT {}
-	RandVarFromFunctionsT.__numParams = #ParamTypes
+	RandVarFromFunctionsT.ValType = ValType
 
 	-- Add one field for each parameter
 	local paramFieldNames = {}
-	for i,t in ipairs(ParamTypes) do
+	for i,t in ipairs(paramtypes) do
 		local n = string.format("param%d", i-1),
 		table.insert(paramFieldNames, n)
 		RandVarFromFunctionsT.entries:insert({ field = n, type = t})
@@ -108,7 +112,7 @@ local function RandVarFromFunctions(sample, logprobfn, propose, logProposalProb)
 
 	-- Constructor takes extra parameters
 	local paramsyms = {}
-	for i,t in ipairs(ParamTypes) do table.insert(paramsyms, symbol(t)) end
+	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
 	terra RandVarFromFunctionsT:__construct(val: ValType, isstruct: bool, iscond: bool, [paramsyms])
 		[RandVarWithVal(ValType)].__construct(self, val, isstruct, iscond)
 		[genParamFieldsExpList(self)] = [paramsyms]
@@ -155,125 +159,108 @@ end
 -- NOTE: Any and all parameter/value types must define the __eq operator!
 local function makeERP(sample, logprobfn, propose, logProposalProb)
 
-	local RVType = RandVarFromFunctions(sample, logprobfn, propose, logProposalProb)
+	local erpFnPair = templatize(function(...)
 
-	local function getIsStructural(opstruct)
-		if opstruct then
-			local ostype = optstruct:gettype()
-			for _,e in ipairs(ostype:getentries()) do
-				if e.field == "isStructural" then
-					return `optstruct.isStructural
-				end
-			end
-		end
-		return nil
-	end
-
-	local function getIsConditioned(opstruct)
-		if opstruct then
-			local ostype = optstruct:gettype()
-			for _,e in ipairs(ostype:getentries()) do
-				if e.field == "conditionedValue" then
-					return true
-				end
-			end
-		end
-		return false
-	end
-
-	local function getConditionedValue(opstruct)
-		if opstruct then
-			local ostype = optstruct:gettype()
-			for _,e in ipairs(ostype:getentries()) do
-				if e.field == "conditionedValue" then
-					return `optstruct.conditionedValue
-				end
-			end
-		end
-		return nil
-	end
-
-	local function makeERPfn(opstruct)
-		local paramtypes = sample:getdefinitions()[1]:gettype().parameters
+		local paramtypes = {}
 		local paramsyms = {}
-		for _,t in ipairs(paramtypes) do table.inserT(paramsyms, symbol(t)) end
+		for i=1,select("#",...) do
+			local ptype = (select(i,...))
+			table.insert(paramtypes, ptype)
+			table.insert(paramsyms, symbol(ptype))
+		end
 
-		-- Default values
-		local val = getConditionedValue(optstruct) or `sample([paramsyms])
-		local iscond = getIsConditioned(optstruct)
-		local isstruct = getIsStructural(opstruct)
+		-- TODO: Implement this (retrieve by params)
+		local RVType = nil
 
-		local function checkParams(self, hasChanges)
-			local checkexps = {}
-			for i,p in ipairs(paramsyms) do
-				local n = string.format("params", i-1)
-				table.insert(checkexps,
-					quote
-						if self.[n] ~= p then
-							self.[n] = p
+		local function makeERPfn(iscond)
+
+			local val = iscond and symbol(RVType.ValType) else `sample([paramsyms])
+			local isstruct = symbol(bool)
+
+			local function checkParams(self, hasChanges)
+				local checkexps = {}
+				for i,p in ipairs(paramsyms) do
+					local n = string.format("params", i-1)
+					table.insert(checkexps,
+						quote
+							if self.[n] ~= p then
+								self.[n] = p
+								hasChanges = true
+							end
+						end)
+				end
+				return checkexps
+			end
+
+			local function checkConditionedValue(self, val, hasChanges)
+				if iscond then
+					return quote
+						if self.value ~= val then
+							self.value = val
 							hasChanges = true
 						end
-					end)
-			end
-			return checkexps
-		end
-
-		local function checkConditionedValue(self, hasChanges)
-			if iscond then
-				return quote
-					if self.value ~= [val] then
-						self.value = [val]
-						hasChanges = true
 					end
-				end
-			else return quote end
-		end
-
-		-- Here's the actual function that gets called at runtime.
-		-- Note that it's wrapped with trace.pfn, so rand var names can be tracked.
-		return trace.pfn(terra([paramsyms])
-			var value = [val]
-			-- Check if this random variable already exists
-			var randvar: &RandVar = nil
-			trace.lookupVariable(isstruct)
-			if randvar ~= nil then
-				-- The variable does exist. The logprob will need to
-				--    be updated if the conditioned value or any params
-				--    have changed
-				var rvart = [&RVType](randvar)
-				var hasChanges = false	
-				[checkParams(randvar, hasChanges)]
-				[checkConditionedValue(randvar, hasChanges)]
-			else
-				-- This variable doesn't yet exist, so create it
-				--    and stick it in the trace
-				randvar = RVType.heapAlloc([val], isstruct, iscond, [params])
-				trace.addNewVariable(randvar)
+				else return quote end
 			end
-		end)
-	end
 
-	-- For efficiency, we cache generated code. We need to generate code
-	--   for isDirectlyConditioned={true|false}
-	--   Everything else must be resolved at runtime.
-	local erpCache = {}
-	local function erpCacheLookup(opstruct)
-		local iscond = getIsConditioned(optstruct)
-		local cfn = erpCache[iscond]
-		if not cfn then
-			cfn = makeERPfn(optstruct)
-			erpCache[iscond] = cfn
+			local body = quote
+				-- Check if this random variable already exists
+				var randvar: &RandVar = nil
+				trace.lookupVariable(isstruct)
+				if randvar ~= nil then
+					-- The variable does exist. The logprob will need to
+					--    be updated if the conditioned value or any params
+					--    have changed
+					var rvart = [&RVType](randvar)
+					var hasChanges = false	
+					[checkParams(randvar, hasChanges)]
+					[checkConditionedValue(randvar, hasChanges)]
+				else
+					-- This variable doesn't yet exist, so create it
+					--    and stick it in the trace
+					randvar = RVType.heapAlloc(val, isstruct, iscond, [params])
+					trace.addNewVariable(randvar)
+				end
+				return ([&RVType](randvar)).value
+			end
+
+			if iscond then
+				return terra(isstruct, val, [paramsyms])
+					[body]
+				end
+			else
+				return terra(isstruct, [paramsyms])
+					[body]
+				end
+			end
 		end
-		return cfn
-	end
+
+		local ret = {}
+		ret[true] = makeERPfn(true)
+		ret[false] = makeERPfn(false)
+		return ret
+
+	end)
+
+	local numparams = #sample:getdefinitions()[1]:gettype().params
 
 	-- Finally, return the macro which generates the ERP function call.
 	return macro(function(...)
-		local optstruct = (select(RVType.__numParams+1, ...))
-		local erpfn = erpCacheLookup(optstruct)
 		local params = {}
-		for i=1,RVType.__numParams do table.insert(params, (select(i,...))) end
-		return `erpfn([params])
+		for i=1,numparams do table.insert(params, (select(i,...))) end
+		local paramtypes = {}
+		for _,p in ipairs(params) do table.insert(paramtypes, p:gettype()) end
+		local erpfns = erpFnPair(unpack(paramtypes))
+		local optstruct = (select(RVType.__numParams+1, ...))
+		local iscond = getIsConditioned(opstruct)
+		local erpfn = erpfns[iscond]
+		local isstruct = getIsStructural(opstruct)
+		if iscond then
+			local val = `opstruct.conditionedValue
+			return `erpfn(isstruct, val, [params])
+		else
+			return `erpfn(isstruct, [params])
+		end
 	end)
 end
 
@@ -284,12 +271,65 @@ local erp = {makeERP = makeERP}
 
 erp.flip =
 makeERP(random.flip_sample(double),
-		random.flip_logprob(double, double),
+		random.flip_logprob(double),
 		terra(currval: double, p: double) if currval == 0 then return 1 else return 0 end end,
 		terra (currval: double, propval: double, p: double) return 0.0 end)
 
--- erp.uniform = 
--- makeERP(random.uniform_sample())
+erp.uniform =
+makeERP(random.uniform_sample(double),
+		random.uniform_logprob(double))
+
+erp.multinomial =
+makeERP(random.multinomial_sample(double),
+	    random.multinomial_logprob(double),
+	    terra(currval: int, params: Vector(double))
+	    	var newparams = m.copy(params)
+	    	newparams:set(currval, 0)
+	    	return [random.multinomial_sample(double)](newparams)
+	    	m.destruct(newparams)
+	    end,
+	    terra(currval: int, propval: int, params: Vector(double))
+	    	var newparams = m.copy(params)
+	    	newparams:set(currval, 0)
+	    	return [random.multinomial_logprob(double)](propval, newparams)
+	    	m.destruct(newparams)
+    	end)
+
+erp.gaussian =
+makeERP(random.gaussian_sample(double),
+		random.gaussian_logprob(double),
+		terra(currval: double, mu: double, sigma: double)
+			return [random.gaussian_sample(double)](currval, sigma)
+		end,
+		terra(currval: double, propval: double, mu: double, sigma: double)
+			return [random.gaussian_logprob(double)](propval, currval, sigma)
+		end)
+
+erp.gamma =
+makeERP(random.gamma_sample(double),
+		random.gamma_logprob(double))
+
+erp.beta = 
+makeERP(random.beta_sample(double),
+		random.beta_logprob(double))
+
+erp.binomial = 
+makeERP(random.binomial_sample(double),
+		random.binomial_logprob(double))
+
+erp.poisson = 
+makeERP(random.poisson_sample(double),
+		random.poisson_logprob(double))
+
+erp.dirichlet =
+makeERP(random.dirichlet_sample(double),
+		random.dirichlet_logprob(double))
+
+
+
+
+return erp
+
 
 
 
