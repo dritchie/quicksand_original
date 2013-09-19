@@ -1,15 +1,15 @@
 local erp = terralib.require("prob.erph")
 local RandVar = erp.RandVar
+local iface = terralib.require("interface")
+local Vector = terralib.require("vector")
+local HashMap = terralib.require("hashmap")
+local templatize = terralib.require("templatize")
 
-local Vector = terralib.require("Vector")
 
-
--- VARIABLE ADDRESSING
+-- ADDRESS TRANSFORM
 
 local callsiteStack = global(Vector(int))
-local loopnumStack = global(Vector(int))
-Vector(int).methods.__construct(callsiteStack:get())
-Vector(int).methods.__construct(loopnumStack:get())
+Vector(int).methods.__construct(callsiteStack:getpointer())
 
 -- Wrap a Terra function in a macro that, when called, will assign a
 --    unique id to that call site.
@@ -29,18 +29,22 @@ local function pfn(fn)
 	return macro(function(...)
 		local args = {}
 		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
+		local argintermediates = {}
+		for _,a in ipairs(args) do table.insert(argintermediates, symbol(a:gettype())) end
 		if numrets == 0 then
 			return quote
+				[argintermediates] = [args]
 				callsiteStack:push(myid)
-				fn([args])
+				fn([argintermediates])
 				callsiteStack:pop()
 			end
 		else
 			local results = {}
 			for i=1,numrets do table.insert(results, symbol()) end
 			return quote
+				[argintermediates] = [args]
 				callsiteStack:push(myid)
-				[results] = fn([args])
+				[results] = fn([argintermediates])
 				callsiteStack:pop()
 			in
 				[results]
@@ -48,6 +52,33 @@ local function pfn(fn)
 		end
 	end)
 end
+
+
+-- TRACE MANAGEMENT
+
+local GlobalTraceInterface = iface.create {
+	lookupVariable: {bool} -> &RandVar;
+	addNewVariable: {&RandVar} -> {};
+	factor: {double} -> {};
+	condition: {bool} -> {};
+}
+
+local globalTrace = global(GlobalTraceInterface)
+
+local terra setGlobalTrace(trace: GlobalTraceInterface)
+	globalTrace = trace
+end
+
+
+local RandExecTrace = templatize(function(ComputationType)
+
+	local struct Trace
+	{
+		computation: &ComputationType
+	}
+
+end)
+
 
 
 -- PUBLIC INTERFACE
@@ -58,7 +89,7 @@ local terra lookupVariable(isStructural: bool) : &RandVar
 end
 
 local terra addNewVariable(newvar: &RandVar) : {}
-	--
+	-- TODO: Complete!
 end
 
 
