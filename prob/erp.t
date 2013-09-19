@@ -35,17 +35,17 @@ local RandVarWithVal = templatize(function(ValType)
 	terra RandVarWithValT:valueTypeID() : uint64
 		return ValTypeID
 	end
-	inheritance.virtual(RandVarWithValT.methods.valueTypeID)
+	inheritance.virtual(RandVarWithValT, "valueTypeID")
 
 	terra RandVarWithValT:pointerToValue() : &opaque
 		return [&opaque](&self.value)
 	end
-	inheritance.virtual(RandVarWithValT.methods.pointerToValue)
+	inheritance.virtual(RandVarWithValT, "pointerToValue")
 
 	terra RandVarWithValT:proposeNewValue() : {ValType, double, double}
 		notImplementedError("proposeNewValue", [string.format("RandVarWithVal(%s)", tostring(ValType))])
 	end
-	inheritance.virtual(RandVarWithValT.methods.proposeNewValue)
+	inheritance.virtual(RandVarWithValT, "proposeNewValue")
 
 	inheritance.dynamicExtend(RandVar, RandVarWithValT)
 	return RandVarWithValT
@@ -136,7 +136,7 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 	terra RandVarFromFunctionsT:updateLogprob() : {}
 		self.logprob = logprobfn(self.value, [genParamFieldsExpList(self)])
 	end
-	inheritance.virtual(RandVarFromFunctionsT.methods.updateLogprob)
+	inheritance.virtual(RandVarFromFunctionsT, "updateLogprob")
 
 	-- Propose new value
 	terra RandVarFromFunctionsT:proposeNewValue() : {ValType, double, double}
@@ -145,7 +145,7 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 		var rvsPropLP = logProposalProb(newval, self.value, [genParamFieldsExpList(self)])
 		return newval, fwdPropLP, rvsPropLP
 	end
-	inheritance.virtual(RandVarFromFunctionsT.methods.proposeNewValue)
+	inheritance.virtual(RandVarFromFunctionsT, "proposeNewValue")
 
 	inheritance.dynamicExtend(RandVarWithVal(ValType), RandVarFromFunctionsT)
 	return RandVarFromFunctionsT
@@ -245,6 +245,29 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 	end)
 
 	local numparams = #sample:getdefinitions()[1]:gettype().parameters
+
+	local function getIsStructural(opstruct)
+		if opstruct then
+			local ostype = optstruct:gettype()
+			for _,e in ipairs(ostype:getentries()) do
+				if e.field == "isStructural" then
+					return `optstruct.isStructural
+				end
+			end
+		end
+		return false
+	end
+
+	local function getIsConditioned(opstruct)
+		if opstruct then
+			local ostype = optstruct:gettype()
+			for _,e in ipairs(ostype:getentries()) do
+				if e.field == "conditionedValue" then
+					return true
+				end
+			end
+		end
+		return false
 
 	-- Finally, return the macro which generates the ERP function call.
 	return macro(function(...)

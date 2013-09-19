@@ -32,17 +32,17 @@ end
 terra RandVar:valueTypeID() : uint64
 	notImplementedError("valueTypeID", "RandVar")
 end
-inheritance.virtual(RandVar.methods.valueTypeID)
+inheritance.virtual(RandVar, "valueTypeID")
 
 terra RandVar:pointerToValue() : &opaque
 	notImplementedError("pointerToValue", "RandVar")
 end
-inheritance.virtual(RandVar.methods.valueTypeID)
+inheritance.virtual(RandVar, "pointerToValue")
 
 terra RandVar:updateLogprob() : {}
 	notImplementedError("updateLogprob", "RandVar")
 end
-inheritance.virtual(RandVar.methods.updateLogprob)
+inheritance.virtual(RandVar, "updateLogprob")
 
 
 -- Functions to inspect the value type of any random variable
