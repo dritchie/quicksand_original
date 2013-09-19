@@ -1,4 +1,5 @@
 local inheritance = terralib.require("inheritance")
+local templatize = terralib.require("templatize")
 
 local C = terralib.includecstring [[
 #include <stdio.h>

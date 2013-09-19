@@ -2,14 +2,15 @@
 local random = terralib.require("prob.random")
 local templatize = terralib.require("templatize")
 local inheritance = terralib.require("inheritance")
+local Vector = terralib.require("vector")
 local m = terralib.require("mem")
 
-local erph = terralib.require("erp.h")
+local erph = terralib.require("prob.erph")
 local RandVar = erph.RandVar
 local notImplementedError = erph.notImplementedError
 local typeToID = erph.typeToID
 
-local trace = terralib.require("trace")
+local trace = terralib.require("prob.trace")
 
 
 
@@ -169,12 +170,11 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 			table.insert(paramsyms, symbol(ptype))
 		end
 
-		-- TODO: Implement this (retrieve by params)
-		local RVType = nil
+		local RVType = RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logProposalProb)
 
 		local function makeERPfn(iscond)
 
-			local val = iscond and symbol(RVType.ValType) else `sample([paramsyms])
+			local val = iscond and symbol(RVType.ValType) or `sample([paramsyms])
 			local isstruct = symbol(bool)
 
 			local function checkParams(self, hasChanges)
@@ -200,7 +200,9 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 							hasChanges = true
 						end
 					end
-				else return quote end
+				else
+					return quote end
+				end
 			end
 
 			local body = quote
@@ -225,11 +227,11 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 			end
 
 			if iscond then
-				return terra(isstruct, val, [paramsyms])
+				return terra(isstruct: bool, val: RVType.ValType, [paramsyms])
 					[body]
 				end
 			else
-				return terra(isstruct, [paramsyms])
+				return terra(isstruct: bool, [paramsyms])
 					[body]
 				end
 			end
@@ -242,7 +244,7 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 
 	end)
 
-	local numparams = #sample:getdefinitions()[1]:gettype().params
+	local numparams = #sample:getdefinitions()[1]:gettype().parameters
 
 	-- Finally, return the macro which generates the ERP function call.
 	return macro(function(...)
@@ -285,15 +287,29 @@ makeERP(random.multinomial_sample(double),
 	    terra(currval: int, params: Vector(double))
 	    	var newparams = m.copy(params)
 	    	newparams:set(currval, 0)
-	    	return [random.multinomial_sample(double)](newparams)
+	    	var ret = [random.multinomial_sample(double)](newparams)
 	    	m.destruct(newparams)
+	    	return ret
 	    end,
 	    terra(currval: int, propval: int, params: Vector(double))
 	    	var newparams = m.copy(params)
 	    	newparams:set(currval, 0)
-	    	return [random.multinomial_logprob(double)](propval, newparams)
+	    	var ret = [random.multinomial_logprob(double)](propval, newparams)
 	    	m.destruct(newparams)
+	    	return ret
     	end)
+
+erp.multinomialDraw = macro(function(items, probs, opstruct)
+	return `items:get(erp.multinomial(probs, optstruct))
+end)
+
+erp.uniformDraw = macro(function(items, opstruct)
+	return quote
+		var probs = [Vector(double)].stackAlloc(items.length, 1.0/items.length)
+	in
+		items:get(erp.multinomial(probs, opstruct))
+	end
+end)
 
 erp.gaussian =
 makeERP(random.gaussian_sample(double),

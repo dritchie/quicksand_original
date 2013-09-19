@@ -24,34 +24,34 @@ local C = terralib.includec("stdio.h")
 
 ------------------------------
 
-local function forWithStep(indexvar, initval, finalval, step, body)
-	local loopindex = symbol(int)
-	return quote
-		for [loopindex]=initval,finalval,step do
-			indexvar = [loopindex]
-			body
-		end
-	end
-end
+-- local function forWithStep(indexvar, initval, finalval, step, body)
+-- 	local loopindex = symbol(int)
+-- 	return quote
+-- 		for [loopindex]=initval,finalval,step do
+-- 			indexvar = [loopindex]
+-- 			body
+-- 		end
+-- 	end
+-- end
 
-local pfor = macro(function(...)
-	if select("#",...) == 5 then
-		return forWithStep(...)
-	else
-		return forWithStep((select(1,...)), (select(2,...)), (select(3,...)), 1, (select(4,...)))
-	end
-end)
+-- local pfor = macro(function(...)
+-- 	if select("#",...) == 5 then
+-- 		return forWithStep(...)
+-- 	else
+-- 		return forWithStep((select(1,...)), (select(2,...)), (select(3,...)), 1, (select(4,...)))
+-- 	end
+-- end)
 
-local terra testfor()
-	var i: int
-	pfor(i, 0, 10,
-	[quote
-		C.printf("%d\n", i)
-	end]
-	)
-end
+-- local terra testfor()
+-- 	var i: int
+-- 	pfor(i, 0, 10,
+-- 	[quote
+-- 		C.printf("%d\n", i)
+-- 	end]
+-- 	)
+-- end
 
-testfor()
+-- testfor()
 
 ------------------------------
 
@@ -62,3 +62,8 @@ testfor()
 -- end
 
 -- testsum()
+
+------------------------------
+
+local random = terralib.require("prob.random")
+local erp = terralib.require("prob.erp")

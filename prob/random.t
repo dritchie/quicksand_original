@@ -5,10 +5,10 @@ local Vector = terralib.require("vector")
 local ad = terralib.require("ad")
 
 -- Base RNG
-local random = util.inline(terralib.includecstring([[
+local random = terralib.includecstring([[
 	#include <stdlib.h>
 	double random_() { return rand() / (RAND_MAX+1.0); }
-]]).random_)
+]]).random_
 
 
 -- Turning templated functions into overloaded ones
@@ -20,6 +20,10 @@ local function specialize(name, numparams, fntemplate)
 		-- parameter types.
 		if numparams == 0 then
 			return fntemplate(V)
+		elseif V ~= ad.num then
+			local types = {}
+			for i=1,numparams do table.insert(types, double) end
+			return fntemplate(V, unpack(types))
 		else
 			local overallfn = nil
 			local numVariants = 2 ^ numparams
@@ -39,6 +43,7 @@ local function specialize(name, numparams, fntemplate)
 				else
 					overallfn:adddefinition(fn:getdefinitions()[1])
 				end
+				bitstring = bitstring + 1
 			end
 			return overallfn
 		end
@@ -49,7 +54,7 @@ end
 -- Samplers/scorers
 
 specialize("flip_sample", 1, function(V, P)
-	terra(p: P)
+	return terra(p: P)
 		var randval = random()
 		if randval < p then
 			return 1
@@ -78,7 +83,7 @@ specialize("multinomial_sample", 1, function(V, P)
 		var result: int = 0
 		var x = random() * sum
 		var probAccum = 0.00000001
-		while result <= n and x > probAccum do
+		while result <= params.size and x > probAccum do
 			probAccum = probAccum + params:get(result)
 			result = result + 1
 		end
@@ -135,9 +140,9 @@ specialize("gaussian_logprob", 2, function(V, P1, P2)
 end)
 
 specialize("gamma_sample", 2, function(V, P1, P2)
-	local terra sample(a: P1, b: P2)
+	local terra sample(a: P1, b: P2) : V
 		if a < 1.0 then return V(sample(1.0+a,b) * ad.math.pow(random(), 1.0/a)) end
-		var x:double, v:T1, u:double
+		var x:double, v:V, u:double
 		var d = a - 1.0/3.0
 		var c = 1.0/ad.math.sqrt(9.0*d)
 		while true do
@@ -155,7 +160,11 @@ specialize("gamma_sample", 2, function(V, P1, P2)
 	return sample
 end)
 
-local gamma_cof = global(double[6], {76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5})
+local gamma_cof = global(double[6])
+local terra init_gamma_cof()
+	gamma_cof = array(76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5)
+end
+init_gamma_cof()
 local log_gamma = templatize(function(T)
 	return terra(xx: T)
 		var x = xx - 1.0
@@ -247,7 +256,7 @@ specialize("binomial_logprob", 1, function(V, P)
 		var d1 = s + inv6 - (n + inv3) * p
 		var d2 = q/(s+inv2) - p/(T+inv2) + (q-inv2)/(n+1)
 		d2 = d1 + 0.02*d2
-		var num = 1.0 + q * fns.g(S/(n*p)) + p * fns.g(T/(n*q))
+		var num = 1.0 + q * g.implicit(S/(n*p)) + p * g.implicit(T/(n*q))
 		var den = (n + inv6) * p * q
 		var z = num / den
 		var invsd = ad.math.sqrt(z)
@@ -326,7 +335,7 @@ specialize("dirichlet_sample", 1, function(V, P)
 end)
 
 specialize("dirichlet_logprob", 1, function(V, P)
-	return terra logprob(theta: Vector(V), params: Vector(P))
+	return terra(theta: Vector(V), params: Vector(P))
 		var sum = P(0.0)
 		for i=0,params.size do sum = sum + params:get(i) end
 		var logp = log_gamma.implicit(sum)

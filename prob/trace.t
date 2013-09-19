@@ -1,4 +1,4 @@
-local erp = terralib.require("erp.h")
+local erp = terralib.require("prob.erph")
 local RandVar = erp.RandVar
 
 local Vector = terralib.require("Vector")
@@ -28,7 +28,7 @@ local function pfn(fn)
 	nextid = nextid + 1
 	return macro(function(...)
 		local args = {}
-		for i=1,select("#",...) table.insert(args, (select(i,...))) end
+		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
 		if numrets == 0 then
 			return quote
 				callsiteStack:push(myid)
