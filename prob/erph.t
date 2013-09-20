@@ -29,6 +29,18 @@ terra RandVar:__construct(isstruct: bool, iscond: bool)
 	self:updateLogprob()	-- Initializes the logprob field
 end
 
+terra RandVar:__copy(othervar: &RandVar)
+	self.isStructural = othervar.isStructural
+	self.isDirectlyConditioned = othervar.isDirectlyConditioned
+	self.isActive = othervar.isActive
+	self.logprob = othervar.logprob
+end
+
+terra RandVar:deepcopy() : &RandVar
+	notImplementedError("deepcopy", "RandVar")
+end
+inheritance.virtual(RandVar, "deepcopy")
+
 terra RandVar:valueTypeID() : uint64
 	notImplementedError("valueTypeID", "RandVar")
 end

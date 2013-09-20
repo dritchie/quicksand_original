@@ -27,6 +27,11 @@ local RandVarWithVal = templatize(function(ValType)
 		self.value = val
 	end
 
+	terra RandVarWithValT:__copy(othervar: &RandVarWithValT)
+		RandVar.__copy(self, othervar)
+		self.value = m.copy(othervar.value)
+	end
+
 	terra RandVarWithValT:__destruct()
 		m.destruct(self.value)	
 	end
@@ -119,6 +124,26 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 		[genParamFieldsExpList(self)] = [paramsyms]
 	end
 
+	-- Copy constructor...
+	local function wrapExpListWithCopies(explist)
+		local ret = {}
+		for _,exp in ipairs(explist) do
+			table.insert(ret, `m.copy([exp]))
+		end
+		return ret
+	end
+	terra RandVarFromFunctionsT:__copy(othervar: &RandVarFromFunctionsT)
+		RandVarWithVal.copy(self, othervar)
+		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(genParamFieldsExpList(othervar))]
+	end
+	-- ...and implementing the "deepcopy" virtual method
+	terra RandVarFromFunctionsT:deepcopy() : &RandVar
+		var newvar = m.new(RandVarFromFunctionsT)
+		newvar:__copy(self)
+		return newvar
+	end
+	inheritance.virtual(RandVarFromFunctionsT, "deepcopy")
+
 	-- Destructor should clean up any parameters
 	local function genDestructBlock(self)
 		local statements = {}
@@ -206,6 +231,10 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 			end
 
 			local body = quote
+				-- If there's no global trace (i.e. we're not in inference) just return val
+				if not trace.globalTraceIsSet() then
+					return val
+				end
 				-- Check if this random variable already exists
 				var randvar: &RandVar = nil
 				trace.lookupVariable(isstruct)
@@ -217,6 +246,9 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 					var hasChanges = false	
 					[checkParams(randvar, hasChanges)]
 					[checkConditionedValue(randvar, hasChanges)]
+					if hasChanges then
+						rvart:updateLogprob()
+					end
 				else
 					-- This variable doesn't yet exist, so create it
 					--    and stick it in the trace
@@ -227,7 +259,7 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 			end
 
 			if iscond then
-				return terra(isstruct: bool, val: RVType.ValType, [paramsyms])
+				return terra(isstruct: bool, val, [paramsyms])
 					[body]
 				end
 			else
