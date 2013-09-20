@@ -259,7 +259,7 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 			end
 
 			if iscond then
-				return terra(isstruct: bool, val, [paramsyms])
+				return terra(isstruct: bool, [val], [paramsyms])
 					[body]
 				end
 			else
@@ -300,6 +300,7 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 			end
 		end
 		return false
+	end
 
 	-- Finally, return the macro which generates the ERP function call.
 	return macro(function(...)

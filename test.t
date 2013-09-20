@@ -67,3 +67,5 @@ local C = terralib.includec("stdio.h")
 
 local random = terralib.require("prob.random")
 local erp = terralib.require("prob.erp")
+local trace = terralib.require("prob.trace")
+local inf = terralib.require("prob.inference")

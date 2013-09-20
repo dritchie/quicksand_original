@@ -8,6 +8,7 @@ local HashMap = terralib.require("hashmap")
 local templatize = terralib.require("templatize")
 local inheritance = terralib.require("inheritance")
 local m = terralib.require("mem")
+local rand = terralib.require("prob.random")
 
 
 -- ADDRESS TRANSFORM
@@ -64,25 +65,14 @@ end
 -- This is the interface that global functions such as
 --   'factor' and 'condition' see.
 local GlobalTraceInterface = iface.create {
-	lookupVariable: {bool} -> &RandVar;
-	addNewVariable: {&RandVar} -> {};
-	factor: {double} -> {};
-	condition: {bool} -> {};
+	lookupVariable = {bool} -> &RandVar;
+	addNewVariable = {&RandVar} -> {};
+	factor = {double} -> {};
+	condition = {bool} -> {};
 }
 
 local globalTrace = global(GlobalTraceInterface)
 local haveGlobalTrace = global(bool, false)
-
-local terra setGlobalTrace(trace: GlobalTraceInterface)
-	globalTrace = trace
-	haveGlobalTrace = true
-end
-util.inline(setGlobalTrace)
-
-local terra unsetGlobalTrace()
-	haveGlobalTrace = false
-end
-util.inline(unsetGlobalTrace)
 
 local terra globalTraceIsSet()
 	return haveGlobalTrace
@@ -114,20 +104,60 @@ terra BaseTrace:__copy(trace: &BaseTrace)
 	self.conditionsSatisfied = trace.conditionsSatisfied
 end
 
-terra BaseTrace:deepcopy()
+terra BaseTrace:deepcopy() : &BaseTrace
 	notImplemented("deepcopy", "BaseTrace")
 end
 inheritance.virtual(BaseTrace, "deepcopy")
 
-terra BaseTrace:traceUpdate()
+terra BaseTrace:traceUpdate() : {}
 	notImplemented("traceUpdate", "BaseTrace")
 end
 inheritance.virtual(BaseTrace, "traceUpdate")
 
--- TODO: How to get at the free vars?
--- numFreeVars? getRandomFreeVar? etc.
+terra BaseTrace:varListPointer() : &Vector(&RandVar)
+	notImplemented("varListPointer", "BaseTrace")
+end
+inheritance.virtual(BaseTrace, "varListPointer")
 
-util.addConstructors(BaseTrace)
+local terra isSatisfyingFreeVar(v: &RandVar, structs: bool, nonstructs: bool)
+	return not v.isDirectlyConditioned and 
+		((structs and v.isStructural) or (nonstructs and not v.isStructural))
+end
+util.inline(isSatisfyingFreeVar)
+
+terra BaseTrace:numFreeVars(structs: bool, nonstructs: bool)
+	var vlist = self:varListPointer()
+	var counter = 0
+	for i=0,vlist.size do
+		if isSatisfyingFreeVar(vlist:get(i), structs, nonstructs) then
+			counter = counter + 1
+		end
+	end
+	return counter
+end
+
+-- Caller assumes ownership of the returned vector
+terra BaseTrace:freeVars(structs: bool, nonstructs: bool)
+	var fvars = [Vector(&RandVar)].stackAlloc()
+	var vlist = self:varListPointer()
+	for i=0,vlist.size do
+		var v = vlist:get(i)
+		if isSatisfyingFreeVar(v, structs, nonstructs) then
+			fvars:push(v)
+		end
+	end
+	return fvars
+end
+
+terra BaseTrace:randomFreeVar(structs: bool, nonstructs: bool)
+	var fvars = self:freeVars(structs, nonstructs)
+	var randindex = [uint]([rand.uniform_sample(double)](0, fvars.size))
+	var chosenvar = fvars:randindex()
+	m.destruct(fvars)
+	return chosenvar
+end
+
+m.addConstructors(BaseTrace)
 
 
 
@@ -149,6 +179,7 @@ local RandExecTrace = templatize(function(ComputationType)
 	{
 		computation: &ComputationType,
 		vars: HashMap(IdSeq, Vector(&RandVar)),
+		varlist: Vector(&RandVar),
 		loopcounters: HashMap(IdSeq, int),
 		lastVarList: &Vector(&RandVar),
 		returnValue: ComputationType.returns[1]
@@ -159,6 +190,7 @@ local RandExecTrace = templatize(function(ComputationType)
 		BaseTrace.__construct(self)
 		self.computation = comp
 		self.vars = [HashMap(IdSeq, Vector(&RandVar))].stackAlloc()
+		self.varlist = [Vector(&RandVar)].stackAlloc()
 		self.loopcounters = [HashMap(IdSeq, int)].stackAlloc()
 		self.lastVarList = nil
 		-- Initialize the trace with rejection sampling
@@ -181,31 +213,61 @@ local RandExecTrace = templatize(function(ComputationType)
 		self.hasReturnValue = trace.hasReturnValue
 		self.returnValue = m.copy(trace.returnValue)
 		-- Copy vars
+		var old2new = [HashMap(&RandVar, &RandVar)].stackAlloc()
+		--    First copy the name --> var map
 		var it = trace.vars:iterator()
 		util.foreach(it, [quote
 			var k, v = it:keyvalPointer()
 			var vlistp = self.vars:getOrCreatePointer(@k)
 			for i=0,v.size do
-				vlistp:push(v:get(i):deepcopy())
+				var oldvar = v:get(i)
+				var newvar = oldvar:deepcopy()
+				old2new:put(oldvar, newvar)
+				vlistp:push(newvar)
 			end
 		end])
+		--   Then copy the flat var list
+		self.varlist:resize(trace.varlist.size)
+		for i=0,trace.varlist.size do
+			self.varlist:set(i, @(old2new:getPointer(trace.varlist:get(i))))
+		end
+		m.destruct(old2new)
 	end
+
+	terra Trace:deepcopy() : &BaseTrace
+		var t = m.new(Trace)
+		t:__copy(self)
+		return t
+	end
+	inheritance.virtual(Trace, "deepcopy")
+
+	terra Trace:varListPointer() : &Vector(&RandVar)
+		return &self.varlist
+	end
+	inheritance.virtual(Trace, "varListPointer")
 
 	terra Trace:__destruct()
 		m.destruct(self.vars)
+		m.destruct(self.varlist)
 		m.destruct(self.loopcounters)
 		m.destruct(self.inactiveVarNames)
 		m.destruct(self.returnValue)
 	end
 
-	terra Trace:traceUpdate()
+	terra Trace:traceUpdate() : {}
+		-- Assume ownership of the global trace
 		var prevtrace = globalTrace
+		var prevHasGlobalTrace = haveGlobalTrace
 		globalTrace = self
+		haveGlobalTrace = true
 
 		self.logprob = 0.0
 		self.newlogprob = 0.0
 		self.loopcounters:clear()
 		self.conditionsSatisfied = true
+
+		-- Clear out the flat var list so we can properly refill it
+		self.varlist:clear()
 
 		-- Mark all variables as inactive; only those reached by the computation
 		-- will become active
@@ -241,6 +303,10 @@ local RandExecTrace = templatize(function(ComputationType)
 				end
 			end
 		end])
+
+		-- Reset the global trace datat
+		globalTrace = prevtrace
+		haveGlobalTrace = prevHasGlobalTrace
 	end
 	inheritance.virtual(Trace, "traceUpdate")
 
@@ -274,6 +340,8 @@ local RandExecTrace = templatize(function(ComputationType)
 		-- Due to the bookkeeping we did in lookupVariable, the only thing
 		-- we have to do here is just push the new variables onto lastVarList
 		self.lastVarList:push(newvar)
+		-- (Also push to the flat list so we capture vars in order of creation)
+		self.varlist:push(newvar)
 	end
 
 	terra Trace:factor(num: double)
@@ -290,7 +358,13 @@ local RandExecTrace = templatize(function(ComputationType)
 end)
 
 
-
+-- Caller assumes ownership of the returned trace
+local newTrace = macro(function(computation)
+	-- Assume computation is a function pointer
+	local comptype = computation:gettype().type
+	local TraceType = RandExecTrace(comptype)
+	return `TraceType.heapAlloc(computation)
+end)
 
 
 local lookupVariable = macro(function(isstruct)
@@ -321,9 +395,15 @@ end)
 return
 {
 	pfn = pfn,
+	newTrace = newTrace,
+	BaseTrace = BaseTrace,
 	globalTraceIsSet = globalTraceIsSet,
 	lookupVariable = lookupVariable,
 	addNewVariable = addNewVariable,
 	factor = factor,
 	condition = condition
 }
+
+
+
+
