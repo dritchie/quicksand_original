@@ -1,10 +1,12 @@
 local erp = terralib.require("prob.erph")
 local RandVar = erp.RandVar
+local notImplemented = erp.notImplementedError
 local util = terralib.require("util")
 local iface = terralib.require("interface")
 local Vector = terralib.require("vector")
 local HashMap = terralib.require("hashmap")
 local templatize = terralib.require("templatize")
+local inheritance = terralib.require("inheritance")
 local m = terralib.require("mem")
 
 
@@ -58,6 +60,9 @@ end
 
 -- TRACE MANAGEMENT
 
+-- We have an interface for 'the global trace'
+-- This is the interface that global functions such as
+--   'factor' and 'condition' see.
 local GlobalTraceInterface = iface.create {
 	lookupVariable: {bool} -> &RandVar;
 	addNewVariable: {&RandVar} -> {};
@@ -85,6 +90,49 @@ end
 util.inline(globalTraceIsSet)
 
 
+-- We also have a 'base class' for all traces, which will be extended
+--    by i.e. the single trace and the LARJ trace classes.
+local struct BaseTrace
+{
+	logprob: double,
+	newlogprob: double,
+	oldlogprob: double,
+	conditionsSatisfied: bool,
+}
+
+terra BaseTrace:__construct()
+	self.logprob = 0.0
+	self.newlogprob = 0.0
+	self.oldlogprob = 0.0
+	self.conditionsSatisfied = false
+end
+
+terra BaseTrace:__copy(trace: &BaseTrace)
+	self.logprob = trace.logprob
+	self.newlogprob = trace.newlogprob
+	self.oldlogprob = trace.oldlogprob
+	self.conditionsSatisfied = trace.conditionsSatisfied
+end
+
+terra BaseTrace:deepcopy()
+	notImplemented("deepcopy", "BaseTrace")
+end
+inheritance.virtual(BaseTrace, "deepcopy")
+
+terra BaseTrace:traceUpdate()
+	notImplemented("traceUpdate", "BaseTrace")
+end
+inheritance.virtual(BaseTrace, "traceUpdate")
+
+-- TODO: How to get at the free vars?
+-- numFreeVars? getRandomFreeVar? etc.
+
+util.addConstructors(BaseTrace)
+
+
+
+-- This is the normal, single trace that most inference uses.
+--    It has to specialize on the type of function that it's tracking.
 local RandExecTrace = templatize(function(ComputationType)
 
 	-- For the time being at least, we restrict inference to
@@ -103,38 +151,35 @@ local RandExecTrace = templatize(function(ComputationType)
 		vars: HashMap(IdSeq, Vector(&RandVar)),
 		loopcounters: HashMap(IdSeq, int),
 		lastVarList: &Vector(&RandVar),
-		inactiveVarNames: Vector(&IdSeq),
-		logprob: double,
-		newlogprob: double,
-		oldlogprob: double,
-		conditionsSatisfied: bool,
 		returnValue: ComputationType.returns[1]
-		hasReturnValue: bool
 	}
+	inheritance.dynamicExtend(BaseTrace, Trace)
 
 	terra Trace:__construct(comp: &ComputationType)
+		BaseTrace.__construct(self)
 		self.computation = comp
 		self.vars = [HashMap(IdSeq, Vector(&RandVar))].stackAlloc()
 		self.loopcounters = [HashMap(IdSeq, int)].stackAlloc()
 		self.lastVarList = nil
-		self.inactiveVarNames = [Vector(&IdSeq)].stackAlloc()
-		self.logprob = 0.0
-		self.newlogprob = 0.0
-		self.oldlogprob = 0.0
-		self.conditionsSatisfied = false
-		self.hasReturnValue = false
+		-- Initialize the trace with rejection sampling
+		while not self.conditionsSatisfied do
+			-- Clear out the existing vars
+			var it = self.vars:iterator()
+			util.foreach(it, [quote
+				var vlistp = it:valPointer()
+				for i=0,vlistp.size do m.delete(vlistp:get(i)) end
+			end])
+			self.vars:clear()
+			-- Run the program forward
+			self:traceUpdate()
+		end
 	end
 
 	terra Trace:__copy(trace: &Trace)
 		self:__construct(trace.comp)
-		self.logprob = trace.logprob
-		self.oldlogprob = trace.oldlogprob
-		self.newlogprob = trace.newlogprob
-		self.conditionsSatisfied = trace.conditionsSatisfied
+		BaseTrace.__copy(self, trace)
 		self.hasReturnValue = trace.hasReturnValue
-		if self.hasReturnValue then
-			self.returnValue = m.copy(trace.returnValue)
-		end
+		self.returnValue = m.copy(trace.returnValue)
 		-- Copy vars
 		var it = trace.vars:iterator()
 		util.foreach(it, [quote
@@ -150,9 +195,7 @@ local RandExecTrace = templatize(function(ComputationType)
 		m.destruct(self.vars)
 		m.destruct(self.loopcounters)
 		m.destruct(self.inactiveVarNames)
-		if self.hasReturnValue then
-			m.destruct(self.returnValue)
-		end
+		m.destruct(self.returnValue)
 	end
 
 	terra Trace:traceUpdate()
@@ -168,32 +211,38 @@ local RandExecTrace = templatize(function(ComputationType)
 		-- will become active
 		var it = self.vars:iterator()
 		util.foreach(it, [quote
-			it:valPointer().isActive = false
+			var vlistp = it:valPointer()
+			for i=0,vlistp.size do
+				vlistp:get(i).isActive = false
+			end
 		end])
 
 		-- Run computation
 		self.returnValue = self.computation()
-		self.hasReturnValue = true
 
 		-- Clean up
 		self.loopcounters:clear()
 
 		-- Clear out any random variables that are no longer reachable
 		self.oldlogprob = 0.0
-		self.inactiveVarNames:clear()
 		it = self.vars:iterator()
 		util.foreach(it, [quote
-			var vp = it:valPointer()
-			if not vp.active then
-				self.oldlogprob = self.oldlogprob + vp.logprob
-				self.inactiveVarNames:push(it:keyPointer())
+			var vlistp = it:valPointer()
+			-- For common use cases (e.g. variables created in loops),
+			-- iterating from last var to first will make removal more
+			-- efficient (it'll just be a pop() in most cases)
+			for i=vlistp.size-1,-1,-1 do
+				var vp = vlistp:get(i)
+				if not vp.active then
+					self.oldlogprob = sellf.oldlogprob + vp.logprob
+					vlistp:remove(i)
+					m.delete(vp)
+					i = i + 1
+				end
 			end
 		end])
-		for i=0,self.inactiveVarNames.size do
-			self.vars:remove(@self.inactiveVarNames:get(i))
-		end
-		self.inactiveVarNames:clear()
 	end
+	inheritance.virtual(Trace, "traceUpdate")
 
 	terra Trace:lookupVariable(isstruct: bool)
 		-- How many times have we hit this lexical position (lexpos) before?
