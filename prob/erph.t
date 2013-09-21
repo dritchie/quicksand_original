@@ -26,7 +26,6 @@ terra RandVar:__construct(isstruct: bool, iscond: bool)
 	self.isDirectlyConditioned = iscond
 	self.isActive = true
 	self.logprob = 0.0
-	self:updateLogprob()	-- Initializes the logprob field
 end
 
 terra RandVar:__copy(othervar: &RandVar)
@@ -51,10 +50,10 @@ terra RandVar:pointerToValue() : &opaque
 end
 inheritance.virtual(RandVar, "pointerToValue")
 
-terra RandVar:updateLogprob() : {}
-	notImplementedError("updateLogprob", "RandVar")
+terra RandVar:proposeNewValue() : {double, double}
+	notImplementedError("proposeNewValue", "RandVar")
 end
-inheritance.virtual(RandVar, "updateLogprob")
+
 
 
 -- Functions to inspect the value type of any random variable

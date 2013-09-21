@@ -210,7 +210,6 @@ local RandExecTrace = templatize(function(ComputationType)
 	terra Trace:__copy(trace: &Trace)
 		self:__construct(trace.comp)
 		BaseTrace.__copy(self, trace)
-		self.hasReturnValue = trace.hasReturnValue
 		self.returnValue = m.copy(trace.returnValue)
 		-- Copy vars
 		var old2new = [HashMap(&RandVar, &RandVar)].stackAlloc()
@@ -284,6 +283,7 @@ local RandExecTrace = templatize(function(ComputationType)
 
 		-- Clean up
 		self.loopcounters:clear()
+		self.lastVarList = nil
 
 		-- Clear out any random variables that are no longer reachable
 		self.oldlogprob = 0.0

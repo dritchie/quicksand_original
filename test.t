@@ -65,7 +65,20 @@ local C = terralib.includec("stdio.h")
 
 ------------------------------
 
-local random = terralib.require("prob.random")
-local erp = terralib.require("prob.erp")
-local trace = terralib.require("prob.trace")
-local inf = terralib.require("prob.inference")
+-- local random = terralib.require("prob.random")
+-- local erp = terralib.require("prob.erp")
+-- local trace = terralib.require("prob.trace")
+-- local inf = terralib.require("prob.inference")
+
+------------------------------
+
+local prob = terralib.require("prob")
+local util = terralib.require("util")
+util.openModule(prob)
+
+mcmc(terra()
+		return flip(0.7)
+	end,
+	RandomWalk(),
+	{numsamps = 1000, verbose = true})
+

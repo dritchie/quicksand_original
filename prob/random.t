@@ -51,6 +51,9 @@ local function specialize(name, numparams, fntemplate)
 end
 
 
+fns.random = random
+
+
 -- Samplers/scorers
 
 specialize("flip_sample", 1, function(V, P)
@@ -117,6 +120,10 @@ specialize("uniform_logprob", 2, function(V, P1, P2)
 		return -ad.math.log(hi - lo)
 	end
 end)
+
+terra fns.uniformRandomInt(lo: uint, hi: uint)
+	return [uint]([fns.uniform_sample(double)](lo, hi))
+end
 
 specialize("gaussian_sample", 2, function(V, P1, P2)
 	return terra(mu: P1, sigma: P2)

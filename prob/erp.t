@@ -21,6 +21,7 @@ local RandVarWithVal = templatize(function(ValType)
 	{
 		value: ValType
 	}
+	inheritance.dynamicExtend(RandVar, RandVarWithValT)
 
 	terra RandVarWithValT:__construct(val: ValType, isstruct: bool, iscond: bool)
 		RandVar.__construct(self, isstruct, iscond)
@@ -33,7 +34,7 @@ local RandVarWithVal = templatize(function(ValType)
 	end
 
 	terra RandVarWithValT:__destruct()
-		m.destruct(self.value)	
+		m.destruct(self.value)
 	end
 
 	local ValTypeID = typeToID(ValType)
@@ -47,12 +48,6 @@ local RandVarWithVal = templatize(function(ValType)
 	end
 	inheritance.virtual(RandVarWithValT, "pointerToValue")
 
-	terra RandVarWithValT:proposeNewValue() : {ValType, double, double}
-		notImplementedError("proposeNewValue", [string.format("RandVarWithVal(%s)", tostring(ValType))])
-	end
-	inheritance.virtual(RandVarWithValT, "proposeNewValue")
-
-	inheritance.dynamicExtend(RandVar, RandVarWithValT)
 	return RandVarWithValT
 end)
 
@@ -99,18 +94,19 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 	-- Initialize the class we're building
 	local struct RandVarFromFunctionsT {}
 	RandVarFromFunctionsT.ValType = ValType
+	inheritance.dynamicExtend(RandVarWithVal(ValType), RandVarFromFunctionsT)
 
 	-- Add one field for each parameter
 	local paramFieldNames = {}
 	for i,t in ipairs(paramtypes) do
-		local n = string.format("param%d", i-1),
+		local n = string.format("param%d", i-1)
 		table.insert(paramFieldNames, n)
 		RandVarFromFunctionsT.entries:insert({ field = n, type = t})
 	end
 
 	local function genParamFieldsExpList(self)
 		local exps = {}
-		for i,n in paramFieldNames do
+		for i,n in ipairs(paramFieldNames) do
 			table.insert(exps, `self.[n])
 		end
 		return exps
@@ -122,6 +118,7 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 	terra RandVarFromFunctionsT:__construct(val: ValType, isstruct: bool, iscond: bool, [paramsyms])
 		[RandVarWithVal(ValType)].__construct(self, val, isstruct, iscond)
 		[genParamFieldsExpList(self)] = [paramsyms]
+		self:updateLogprob()
 	end
 
 	-- Copy constructor...
@@ -133,7 +130,7 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 		return ret
 	end
 	terra RandVarFromFunctionsT:__copy(othervar: &RandVarFromFunctionsT)
-		RandVarWithVal.copy(self, othervar)
+		[RandVarWithVal(ValType)].__copy(self, othervar)
 		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(genParamFieldsExpList(othervar))]
 	end
 	-- ...and implementing the "deepcopy" virtual method
@@ -147,7 +144,7 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 	-- Destructor should clean up any parameters
 	local function genDestructBlock(self)
 		local statements = {}
-		for i,n in paramFieldNames do
+		for i,n in ipairs(paramFieldNames) do
 			table.insert(statements, `m.destruct(self.[n]))
 		end
 		return statements
@@ -161,18 +158,19 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 	terra RandVarFromFunctionsT:updateLogprob() : {}
 		self.logprob = logprobfn(self.value, [genParamFieldsExpList(self)])
 	end
-	inheritance.virtual(RandVarFromFunctionsT, "updateLogprob")
 
 	-- Propose new value
-	terra RandVarFromFunctionsT:proposeNewValue() : {ValType, double, double}
+	terra RandVarFromFunctionsT:proposeNewValue() : {double, double}
 		var newval = propose(self.value, [genParamFieldsExpList(self)])
 		var fwdPropLP = logProposalProb(self.value, newval, [genParamFieldsExpList(self)])
 		var rvsPropLP = logProposalProb(newval, self.value, [genParamFieldsExpList(self)])
-		return newval, fwdPropLP, rvsPropLP
+		m.destruct(self.value)
+		self.value = newval
+		self:updateLogprob()
+		return fwdPropLP, rvsPropLP
 	end
 	inheritance.virtual(RandVarFromFunctionsT, "proposeNewValue")
 
-	inheritance.dynamicExtend(RandVarWithVal(ValType), RandVarFromFunctionsT)
 	return RandVarFromFunctionsT
 end
 
@@ -278,6 +276,9 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 
 	local numparams = #sample:getdefinitions()[1]:gettype().parameters
 
+	-- We now default to true, because that seems more sensible
+	-- (i.e. it is always correct to call a variable structural, just
+	-- possibly less efficient)
 	local function getIsStructural(opstruct)
 		if opstruct then
 			local ostype = optstruct:gettype()
@@ -287,7 +288,7 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 				end
 			end
 		end
-		return false
+		return true
 	end
 
 	local function getIsConditioned(opstruct)
@@ -315,6 +316,7 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 		local isstruct = getIsStructural(opstruct)
 		if iscond then
 			local val = `opstruct.conditionedValue
+			-- TODO: Do I need to m.copy val, here?
 			return `erpfn(isstruct, val, [params])
 		else
 			return `erpfn(isstruct, [params])
