@@ -76,6 +76,10 @@ local prob = terralib.require("prob")
 local util = terralib.require("util")
 util.openModule(prob)
 
+local C = terralib.includecstring [[
+#include <stdio.h>
+]]
+
 mcmc(terra()
 		return flip(0.7)
 	end,

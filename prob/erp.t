@@ -13,7 +13,6 @@ local typeToID = erph.typeToID
 local trace = terralib.require("prob.trace")
 
 
-
 -- Every random variable has some value type; this intermediate
 -- class manages that
 local RandVarWithVal = templatize(function(ValType)
@@ -25,7 +24,7 @@ local RandVarWithVal = templatize(function(ValType)
 
 	terra RandVarWithValT:__construct(val: ValType, isstruct: bool, iscond: bool)
 		RandVar.__construct(self, isstruct, iscond)
-		self.value = val
+		self.value = m.copy(val)
 	end
 
 	terra RandVarWithValT:__copy(othervar: &RandVarWithValT)
@@ -171,6 +170,7 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 	end
 	inheritance.virtual(RandVarFromFunctionsT, "proposeNewValue")
 
+	m.addConstructors(RandVarFromFunctionsT)
 	return RandVarFromFunctionsT
 end
 
@@ -203,7 +203,7 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 			local function checkParams(self, hasChanges)
 				local checkexps = {}
 				for i,p in ipairs(paramsyms) do
-					local n = string.format("params", i-1)
+					local n = string.format("param%d", i-1)
 					table.insert(checkexps,
 						quote
 							if self.[n] ~= p then
@@ -219,8 +219,9 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 				if iscond then
 					return quote
 						if self.value ~= val then
-							self.value = val
-							hasChanges = true
+							m.destruct(self.value)
+							self.value = m.copy(val)
+							[hasChanges] = true
 						end
 					end
 				else
@@ -242,26 +243,26 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 					--    have changed
 					var rvart = [&RVType](randvar)
 					var hasChanges = false	
-					[checkParams(randvar, hasChanges)]
-					[checkConditionedValue(randvar, hasChanges)]
+					[checkParams(rvart, hasChanges)]
+					[checkConditionedValue(rvart, hasChanges)]
 					if hasChanges then
 						rvart:updateLogprob()
 					end
 				else
 					-- This variable doesn't yet exist, so create it
 					--    and stick it in the trace
-					randvar = RVType.heapAlloc(val, isstruct, iscond, [params])
+					randvar = RVType.heapAlloc(val, isstruct, iscond, [paramsyms])
 					trace.addNewVariable(randvar)
 				end
 				return ([&RVType](randvar)).value
 			end
 
 			if iscond then
-				return terra(isstruct: bool, [val], [paramsyms])
+				return terra([isstruct], [val], [paramsyms])
 					[body]
 				end
 			else
-				return terra(isstruct: bool, [paramsyms])
+				return terra([isstruct], [paramsyms])
 					[body]
 				end
 			end
@@ -310,13 +311,12 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 		local paramtypes = {}
 		for _,p in ipairs(params) do table.insert(paramtypes, p:gettype()) end
 		local erpfns = erpFnPair(unpack(paramtypes))
-		local optstruct = (select(RVType.__numParams+1, ...))
-		local iscond = getIsConditioned(opstruct)
+		local optstruct = (select(numparams+1, ...))
+		local iscond = getIsConditioned(optstruct)
 		local erpfn = erpfns[iscond]
-		local isstruct = getIsStructural(opstruct)
+		local isstruct = getIsStructural(optstruct)
 		if iscond then
-			local val = `opstruct.conditionedValue
-			-- TODO: Do I need to m.copy val, here?
+			local val = `optstruct.conditionedValue
 			return `erpfn(isstruct, val, [params])
 		else
 			return `erpfn(isstruct, [params])

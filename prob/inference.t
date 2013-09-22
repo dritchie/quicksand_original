@@ -1,5 +1,6 @@
 local trace = terralib.require("prob.trace")
 local BaseTrace = trace.BaseTrace
+local RandExecTrace = trace.RandExecTrace
 local TraceWithRetVal = trace.TraceWithRetVal
 local iface = terralib.require("interface")
 local m = terralib.require("mem")
@@ -167,17 +168,20 @@ local function mcmc(computation, kernel, params)
 	local iters = params.numsamps * lag
 	local verbose = params.verbose or false
 	local burnin = params.burnin or 0
-	local RetValType = computation:getdefinitions()[1]:gettype().returns[1]
+	local CompType = computation:getdefinitions()[1]:gettype()
+	local RetValType = CompType.returns[1]
 	local terra chain()
 		var samps = [Vector(Sample(RetValType))].stackAlloc()
-		var currTrace = trace.newTrace(computation)
+		var comp = computation
+		var currTrace : &BaseTrace = trace.newTrace(comp)
 		for i=0,iters do
 			if verbose then
 				C.printf(" iteration: %d\r", i+1)
 			end
 			currTrace = kernel:next(currTrace)
 			if i % lag == 0 and i > burnin then
-				samps:push([Sample(RetValType)].stackAlloc(currTrace.returnValue, currTrace.logprob))
+				var derivedTrace = [&RandExecTrace(CompType)](currTrace)
+				samps:push([Sample(RetValType)].stackAlloc(derivedTrace.returnValue, derivedTrace.logprob))
 			end
 		end
 		if verbose then

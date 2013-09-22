@@ -10,6 +10,11 @@ local inheritance = terralib.require("inheritance")
 local m = terralib.require("mem")
 local rand = terralib.require("prob.random")
 
+local C = terralib.includecstring [[
+#include <stdio.h>
+]]
+
+
 
 -- ADDRESS TRANSFORM
 
@@ -208,7 +213,7 @@ local RandExecTrace = templatize(function(ComputationType)
 	end
 
 	terra Trace:__copy(trace: &Trace)
-		self:__construct(trace.comp)
+		self:__construct(trace.computation)
 		BaseTrace.__copy(self, trace)
 		self.returnValue = m.copy(trace.returnValue)
 		-- Copy vars
@@ -217,7 +222,7 @@ local RandExecTrace = templatize(function(ComputationType)
 		var it = trace.vars:iterator()
 		util.foreach(it, [quote
 			var k, v = it:keyvalPointer()
-			var vlistp = self.vars:getOrCreatePointer(@k)
+			var vlistp = (self.vars:getOrCreatePointer(@k))
 			for i=0,v.size do
 				var oldvar = v:get(i)
 				var newvar = oldvar:deepcopy()
@@ -295,8 +300,8 @@ local RandExecTrace = templatize(function(ComputationType)
 			-- efficient (it'll just be a pop() in most cases)
 			for i=vlistp.size-1,-1,-1 do
 				var vp = vlistp:get(i)
-				if not vp.active then
-					self.oldlogprob = sellf.oldlogprob + vp.logprob
+				if not vp.isActive then
+					self.oldlogprob = self.oldlogprob + vp.logprob
 					vlistp:remove(i)
 					m.delete(vp)
 					i = i + 1
@@ -320,7 +325,7 @@ local RandExecTrace = templatize(function(ComputationType)
 		@lnump = @lnump + 1
 		-- Grab all variables corresponding to this lexpos
 		-- (getOrCreate means we will get an empty vector instead of nil)
-		var vlistp = self.vars:getOrCreatePointer(callsiteStack)
+		var vlistp = (self.vars:getOrCreatePointer(callsiteStack))
 		self.lastVarList = vlistp
 		-- Return nil if no variables from this lexpos match the current loop num
 		if vlistp.size <= lnum then
@@ -397,6 +402,7 @@ return
 	pfn = pfn,
 	newTrace = newTrace,
 	BaseTrace = BaseTrace,
+	RandExecTrace = RandExecTrace,
 	globalTraceIsSet = globalTraceIsSet,
 	lookupVariable = lookupVariable,
 	addNewVariable = addNewVariable,
