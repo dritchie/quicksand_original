@@ -7,7 +7,7 @@ local C = terralib.includecstring [[
 ]]
 
 local terra notImplementedError(methodname: &int8, classname: &int8)
-	C.printf("Virtual function '%s' not implemented in class '%s'", methodname, classname)
+	C.printf("Virtual function '%s' not implemented in class '%s'\n", methodname, classname)
 	C.exit(1)
 end
 
@@ -53,6 +53,7 @@ inheritance.virtual(RandVar, "pointerToValue")
 terra RandVar:proposeNewValue() : {double, double}
 	notImplementedError("proposeNewValue", "RandVar")
 end
+inheritance.virtual(RandVar, "proposeNewValue")
 
 
 

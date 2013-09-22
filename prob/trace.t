@@ -154,14 +154,6 @@ terra BaseTrace:freeVars(structs: bool, nonstructs: bool)
 	return fvars
 end
 
-terra BaseTrace:randomFreeVar(structs: bool, nonstructs: bool)
-	var fvars = self:freeVars(structs, nonstructs)
-	var randindex = [uint]([rand.uniform_sample(double)](0, fvars.size))
-	var chosenvar = fvars:randindex()
-	m.destruct(fvars)
-	return chosenvar
-end
-
 m.addConstructors(BaseTrace)
 
 
@@ -191,29 +183,31 @@ local RandExecTrace = templatize(function(ComputationType)
 	}
 	inheritance.dynamicExtend(BaseTrace, Trace)
 
-	terra Trace:__construct(comp: &ComputationType)
+	terra Trace:__construct(comp: &ComputationType, doRejectInit: bool)
 		BaseTrace.__construct(self)
 		self.computation = comp
 		self.vars = [HashMap(IdSeq, Vector(&RandVar))].stackAlloc()
 		self.varlist = [Vector(&RandVar)].stackAlloc()
 		self.loopcounters = [HashMap(IdSeq, int)].stackAlloc()
 		self.lastVarList = nil
-		-- Initialize the trace with rejection sampling
-		while not self.conditionsSatisfied do
-			-- Clear out the existing vars
-			var it = self.vars:iterator()
-			util.foreach(it, [quote
-				var vlistp = it:valPointer()
-				for i=0,vlistp.size do m.delete(vlistp:get(i)) end
-			end])
-			self.vars:clear()
-			-- Run the program forward
-			self:traceUpdate()
-		end
+		if doRejectInit then
+			-- Initialize the trace with rejection sampling
+			while not self.conditionsSatisfied do
+				-- Clear out the existing vars
+				var it = self.vars:iterator()
+				util.foreach(it, [quote
+					var vlistp = it:valPointer()
+					for i=0,vlistp.size do m.delete(vlistp:get(i)) end
+				end])
+				self.vars:clear()
+				-- Run the program forward
+				self:traceUpdate()
+			end
+	end
 	end
 
 	terra Trace:__copy(trace: &Trace)
-		self:__construct(trace.computation)
+		self:__construct(trace.computation, false)
 		BaseTrace.__copy(self, trace)
 		self.returnValue = m.copy(trace.returnValue)
 		-- Copy vars
@@ -368,7 +362,7 @@ local newTrace = macro(function(computation)
 	-- Assume computation is a function pointer
 	local comptype = computation:gettype().type
 	local TraceType = RandExecTrace(comptype)
-	return `TraceType.heapAlloc(computation)
+	return `TraceType.heapAlloc(computation, true)
 end)
 
 

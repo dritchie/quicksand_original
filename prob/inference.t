@@ -11,6 +11,10 @@ local Vector = terralib.require("vector")
 local C = terralib.includecstring [[
 #include <stdio.h>
 #include <math.h>
+void flush()
+{
+	fflush(stdout);
+}
 ]]
 
 
@@ -74,20 +78,21 @@ end
 terra RandomWalkKernel:next(currTrace: &BaseTrace)
 	self.proposalsMade = self.proposalsMade + 1
 	var nextTrace = currTrace
-	var freevars = currTrace:freeVars(self.structs, self.nonstructs)
+	var numvars = currTrace:numFreeVars(self.structs, self.nonstructs)
 	-- If there are no free variables, then simply run the computation
 	-- unmodified (nested query can make this happen)
-	if freevars.size == 0 then
+	if numvars == 0 then
 		currTrace:traceUpdate()
 	-- Otherwise, do an MH proposal
 	else
 		nextTrace = currTrace:deepcopy()
+		var freevars = nextTrace:freeVars(self.structs, self.nonstructs)
 		var v = freevars:get(rand.uniformRandomInt(0, freevars.size))
 		var fwdPropLP, rvsPropLP = v:proposeNewValue()
 		nextTrace:traceUpdate()
 		if nextTrace.newlogprob ~= 0.0 or nextTrace.oldlogprob ~= 0.0 then
-			var oldNumVars = freevars.size
-			var newNumVars = nextTrace:numFreeVars(self.structs, self.nonstructs)
+			var oldNumVars = numvars
+			var newNumVars = freevars.size
 			fwdPropLP = fwdPropLP + nextTrace.newlogprob - C.log(oldNumVars)
 			rvsPropLP = rvsPropLP + nextTrace.oldlogprob - C.log(newNumVars)
 		end
@@ -99,13 +104,13 @@ terra RandomWalkKernel:next(currTrace: &BaseTrace)
 			m.delete(nextTrace)
 			nextTrace = currTrace
 		end
+		m.destruct(freevars)
 	end
-	m.destruct(freevars)
 	return nextTrace
 end
 
 terra RandomWalkKernel:stats()
-	C.printf("Acceptance ratio: %g (%u/%u\n",
+	C.printf("Acceptance ratio: %g (%u/%u)\n",
 		[double](self.proposalsAccepted)/self.proposalsMade,
 		self.proposalsAccepted,
 		self.proposalsMade)
@@ -177,6 +182,7 @@ local function mcmc(computation, kernel, params)
 		for i=0,iters do
 			if verbose then
 				C.printf(" iteration: %d\r", i+1)
+				C.flush()
 			end
 			currTrace = kernel:next(currTrace)
 			if i % lag == 0 and i > burnin then

@@ -86,3 +86,13 @@ mcmc(terra()
 	RandomWalk(),
 	{numsamps = 1000, verbose = true})
 
+-- local ffi = require("ffi")
+-- local struct Foo { val: int }
+-- terra makeFoo(num: int)
+-- 	return Foo { num }
+-- end
+-- local f = ffi.gc(makeFoo(42), function(obj) print("finalized") end)
+
+
+
+
