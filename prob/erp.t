@@ -73,7 +73,7 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 			local numargs = #paramtypes + 1
 			local args = {}
 			for i=2,numargs do
-				table.insert(args, select(i,...))
+				table.insert(args, (select(i,...)))
 			end
 			return `sample([args])
 		end)
@@ -84,7 +84,7 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 			local numargs = #paramtypes + 2
 			local args = {}
 			for i=2,numargs do
-				table.insert(args, select(i,...))
+				table.insert(args, (select(i,...)))
 			end
 			return `logprobfn([args])
 		end)
@@ -206,7 +206,7 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 					local n = string.format("param%d", i-1)
 					table.insert(checkexps,
 						quote
-							if self.[n] ~= p then
+							if not (self.[n] == p) then
 								self.[n] = p
 								hasChanges = true
 							end
@@ -282,10 +282,10 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 	-- possibly less efficient)
 	local function getIsStructural(opstruct)
 		if opstruct then
-			local ostype = optstruct:gettype()
+			local ostype = opstruct:gettype()
 			for _,e in ipairs(ostype:getentries()) do
 				if e.field == "isStructural" then
-					return `optstruct.isStructural
+					return `opstruct.isStructural
 				end
 			end
 		end
@@ -294,7 +294,7 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 
 	local function getIsConditioned(opstruct)
 		if opstruct then
-			local ostype = optstruct:gettype()
+			local ostype = opstruct:gettype()
 			for _,e in ipairs(ostype:getentries()) do
 				if e.field == "conditionedValue" then
 					return true
@@ -358,10 +358,12 @@ makeERP(random.multinomial_sample(double),
     	end)
 
 erp.multinomialDraw = macro(function(items, probs, opstruct)
-	return `items:get(erp.multinomial(probs, optstruct))
+	opstruct = opstruct or `{}
+	return `items:get(erp.multinomial(probs, opstruct))
 end)
 
 erp.uniformDraw = macro(function(items, opstruct)
+	opstruct = opstruct or `{}
 	return quote
 		var probs = [Vector(double)].stackAlloc(items.length, 1.0/items.length)
 	in

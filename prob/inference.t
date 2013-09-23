@@ -11,10 +11,7 @@ local Vector = terralib.require("vector")
 local C = terralib.includecstring [[
 #include <stdio.h>
 #include <math.h>
-void flush()
-{
-	fflush(stdout);
-}
+inline void flush() { fflush(stdout); }
 ]]
 
 
@@ -31,7 +28,8 @@ local MCMCKernel = iface.create {
 --         and returns a kernel.
 --    * defaults: A table of default argument values.
 -- This returns a (Lua) function which will take a table of
---    named parameters and return the desired kernel
+--    named parameters and return a no-arg macro which generates
+--    the desired kernel.
 -- The names used in the parameter table must match the names
 --    used in the definition of kernelfn.
 local function makeKernelGenerator(kernelfn, defaults)
@@ -52,9 +50,7 @@ local function makeKernelGenerator(kernelfn, defaults)
 			end
 			table.insert(args, arg)
 		end
-		local kernel = kernelfn(unpack(args))
-		m.gc(kernel)
-		return kernel
+		return macro(function() return `kernelfn([args]) end)
 	end
 end
 
@@ -168,7 +164,7 @@ end)
 -- params are: verbose, numsamps, lag, burnin
 -- returns a Vector of samples, where a sample is a
 --    struct with a 'value' field and a 'logprob' field
-local function mcmc(computation, kernel, params)
+local function mcmc(computation, kernelgen, params)
 	local lag = params.lag or 1
 	local iters = params.numsamps * lag
 	local verbose = params.verbose or false
@@ -176,6 +172,7 @@ local function mcmc(computation, kernel, params)
 	local CompType = computation:getdefinitions()[1]:gettype()
 	local RetValType = CompType.returns[1]
 	local terra chain()
+		var kernel = kernelgen()
 		var samps = [Vector(Sample(RetValType))].stackAlloc()
 		var comp = computation
 		var currTrace : &BaseTrace = trace.newTrace(comp)
@@ -194,19 +191,72 @@ local function mcmc(computation, kernel, params)
 			C.printf("\n")
 			kernel:stats()
 		end
+		m.destruct(kernel)
 		return samps
 	end
-	local samps = chain()
-	m.gc(samps)
-	return samps
+	return `chain()
 end
+
+-- Compute the mean of a set of values
+-- Value type must define + and scalar division
+local mean = templatize(function(V)
+	return terra(vals: &Vector(V))
+		var m = m.copy(vals:get(0))
+		for i=1,vals.size do
+			m = m + vals:get(i)
+		end
+		return m / [double](vals.size)
+	end
+end)
+
+-- Compute expectation over a set of samples
+-- The return value type must define + and scalar division
+local expectation = templatize(function(RetValType)
+	return terra(samps: &Vector(Sample(RetValType)))
+		var m = m.copy(samps:get(0).value)
+		for i=1,samps.size do
+			m = m + samps:get(i).value
+		end
+		return m / [double](samps.size)
+	end
+end)
+
+-- Find the highest scoring sample
+local MAP = templatize(function(RetValType)
+	return terra(samps: &Vector(Sample(RetValType)))
+		var best = [Sample(RetValType)].stackAlloc()
+		best.logprob = [-math.huge]
+		for i=0,samps.size do
+			var s = samps:getPointer()
+			if s.logprob > best.logprob then
+				best.logprob = s.logprob
+				m.destruct(best.value)
+				best.value = m.copy(s.value)
+			end
+		end
+		return best.value
+	end
+end)
+
+-- Draw a sample from a computation via rejection
+local rejectionSample = macro(function(computation)
+	return quote
+		var tr = trace.newTrace(computation)
+	in
+		tr.returnValue
+	end
+end)
 
 
 return
 {
 	makeKernelGenerator = makeKernelGenerator,
 	RandomWalk = RandomWalk,
-	mcmc = mcmc
+	mcmc = mcmc,
+	rejectionSample = rejectionSample,
+	mean = mean,
+	expectation = expectation,
+	MAP = MAP
 }
 
 

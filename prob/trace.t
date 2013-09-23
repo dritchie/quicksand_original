@@ -19,48 +19,47 @@ local C = terralib.includecstring [[
 -- ADDRESS TRANSFORM
 
 local callsiteStack = global(Vector(int))
-Vector(int).methods.__construct(callsiteStack:getpointer())
+local terra initGlobals()
+	m.init(callsiteStack)
+end
+initGlobals()
 
--- Wrap a Terra function in a macro that, when called, will assign a
+-- Wrap a Terra function in another function that, when called, will assign a
 --    unique id to that call site.
 local nextid = 0
 local function pfn(fn)
-	-- Prerequisites: fn must be a terra function, and if it is overloaded,
-	--   all overloads must have the same number of return types
+	-- Prerequisites: fn must not be overloaded
 	assert(terralib.isfunction(fn))
-	local numrets = #fn:getdefinitions()[1]:gettype().returns
-	for i=2,#fn:getdefinitions() do
-		assert(#fn:getdefinitions()[i]:gettype().returns == numrets)
-	end
+	assert(#fn:getdefinitions() == 1)
 
 	-- Now do code gen
 	local myid = nextid
 	nextid = nextid + 1
-	return macro(function(...)
-		local args = {}
-		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
-		local argintermediates = {}
-		for _,a in ipairs(args) do table.insert(argintermediates, symbol(a:gettype())) end
-		if numrets == 0 then
-			return quote
-				[argintermediates] = [args]
-				callsiteStack:push(myid)
-				fn([argintermediates])
-				callsiteStack:pop()
-			end
-		else
-			local results = {}
-			for i=1,numrets do table.insert(results, symbol()) end
-			return quote
-				[argintermediates] = [args]
-				callsiteStack:push(myid)
-				[results] = fn([argintermediates])
-				callsiteStack:pop()
-			in
-				[results]
-			end
+	local paramtypes = fn:getdefinitions()[1]:gettype().parameters
+	local returntypes = fn:getdefinitions()[1]:gettype().returns
+	local paramsyms = {}
+	for _,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
+	local returnsyms = {}
+	for _,t in ipairs(returntypes) do table.insert(returnsyms, symbol(t)) end
+	local fnbody = nil
+	if #returntypes > 0 then
+		fnbody = quote
+			callsiteStack:push(myid)
+			var [returnsyms]
+			[returnsyms] = fn([paramsyms])
+			callsiteStack:pop()
+			return [returnsyms]
 		end
-	end)
+	else
+		fnbody = quote
+			callsiteStack:push(myid)
+			fn([paramsyms])
+			callsiteStack:pop()
+		end
+	end
+	return terra([paramsyms])
+		[fnbody]
+	end
 end
 
 
@@ -329,6 +328,8 @@ local RandExecTrace = templatize(function(ComputationType)
 		-- Now we just need to verify that the structural types match
 		var v = vlistp:get(lnum)
 		if v.isStructural == isstruct then
+			self.logprob = self.logprob + v.logprob
+			v.isActive = true
 			return v
 		else
 			return nil
@@ -336,6 +337,8 @@ local RandExecTrace = templatize(function(ComputationType)
 	end
 
 	terra Trace:addNewVariable(newvar: &RandVar)
+		self.logprob = self.logprob + newvar.logprob
+		self.newlogprob = self.newlogprob + newvar.logprob
 		-- Due to the bookkeeping we did in lookupVariable, the only thing
 		-- we have to do here is just push the new variables onto lastVarList
 		self.lastVarList:push(newvar)

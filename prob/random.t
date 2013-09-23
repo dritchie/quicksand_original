@@ -59,11 +59,7 @@ fns.random = random
 specialize("flip_sample", 1, function(V, P)
 	return terra(p: P)
 		var randval = random()
-		if randval < p then
-			return 1
-		else
-			return 0
-		end
+		return [int](randval < p)
 	end
 end)
 
