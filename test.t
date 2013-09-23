@@ -16,7 +16,7 @@ local str = &int8
 local numsamps = 150
 local lag = 20
 local runs = 5
-local errorTolerance = 0.007
+local errorTolerance = 0.07
 
 local terra test(name: str, estimates: &Vector(double), trueExpectation: double)
 	C.printf("test: %s...", name)
@@ -54,7 +54,7 @@ local function mhtest(name, computation, trueExpectation)
 	return quote
 		var estimates = [Vector(double)].stackAlloc()
 		for run=0,runs do
-			var samps = [mcmc(computation, RandomWalk(), {numsamps=numsamps, lag=lag, verbose=true})]
+			var samps = [mcmc(computation, RandomWalk(), {numsamps=numsamps, lag=lag, verbose=false})]
 			estimates:push([expectation(double)](&samps))
 			m.destruct(samps)
 		end
@@ -84,12 +84,12 @@ end
 
 local terra doTests()
 
-	-- [fwdtest(
-	-- "flip sample",
-	-- terra() : double
- --    	return flip(0.7)
-	-- end,
-	-- 0.7)]
+	[fwdtest(
+	"flip sample",
+	terra() : double
+		return flip(0.7)
+	end,
+	0.7)]
 
 	[mhtest(
 	"flip query",
@@ -98,19 +98,19 @@ local terra doTests()
 	end),
 	0.7)]
 
-	-- [fwdtest(
-	-- "uniform sample",
-	-- terra() : double
- --    	return uniform(0.1, 0.4)
-	-- end,
-	-- 0.5*(.1+.4))]
+	[fwdtest(
+	"uniform sample",
+	terra() : double
+    	return uniform(0.1, 0.4)
+	end,
+	0.5*(.1+.4))]
 
-	-- [mhtest(
-	-- "uniform query",
-	-- terra() : double
- --    	return uniform(0.1, 0.4)
-	-- end,
-	-- 0.5*(.1+.4))]
+	[mhtest(
+	"uniform query",
+	pfn(terra() : double
+    	return uniform(0.1, 0.4)
+	end),
+	0.5*(.1+.4))]
 
 	-- [fwdtest(
 	-- "multinomial sample",

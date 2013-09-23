@@ -63,28 +63,13 @@ local function pfn(fn)
 end
 
 
+
+
+
 -- TRACE MANAGEMENT
 
--- We have an interface for 'the global trace'
--- This is the interface that global functions such as
---   'factor' and 'condition' see.
-local GlobalTraceInterface = iface.create {
-	lookupVariable = {bool} -> &RandVar;
-	addNewVariable = {&RandVar} -> {};
-	factor = {double} -> {};
-	condition = {bool} -> {};
-}
 
-local globalTrace = global(GlobalTraceInterface)
-local haveGlobalTrace = global(bool, false)
-
-local terra globalTraceIsSet()
-	return haveGlobalTrace
-end
-util.inline(globalTraceIsSet)
-
-
--- We also have a 'base class' for all traces, which will be extended
+-- We have a 'base class' for all traces, which will be extended
 --    by i.e. the single trace and the LARJ trace classes.
 local struct BaseTrace
 {
@@ -157,6 +142,119 @@ m.addConstructors(BaseTrace)
 
 
 
+
+
+
+local IdSeq = Vector(int)
+-- Functionality shared by single execution traces regardless of their return types
+-- This is the type of the trace that gets stored as the global trace during
+--    program execution.
+local struct GlobalTrace
+{
+	vars: HashMap(IdSeq, Vector(&RandVar)),
+	varlist: Vector(&RandVar),
+	loopcounters: HashMap(IdSeq, int),
+	lastVarList: &Vector(&RandVar)		
+}
+inheritance.dynamicExtend(BaseTrace, GlobalTrace)
+
+-- TODO: The flat var list optimization idea from previous implementations
+
+terra GlobalTrace:__construct()
+	BaseTrace.__construct(self)
+	self.vars = [HashMap(IdSeq, Vector(&RandVar))].stackAlloc()
+	self.varlist = [Vector(&RandVar)].stackAlloc()
+	self.loopcounters = [HashMap(IdSeq, int)].stackAlloc()
+	self.lastVarList = nil	
+end
+
+terra GlobalTrace:__copy(trace: &GlobalTrace)
+	self:__construct()
+	BaseTrace.__copy(self, trace)
+	-- Copy vars
+	var old2new = [HashMap(&RandVar, &RandVar)].stackAlloc()
+	--    First copy the name --> var map
+	var it = trace.vars:iterator()
+	util.foreach(it, [quote
+		var k, v = it:keyvalPointer()
+		var vlistp = (self.vars:getOrCreatePointer(@k))
+		for i=0,v.size do
+			var oldvar = v:get(i)
+			var newvar = oldvar:deepcopy()
+			old2new:put(oldvar, newvar)
+			vlistp:push(newvar)
+		end
+	end])
+	--   Then copy the flat var list
+	self.varlist:resize(trace.varlist.size)
+	for i=0,trace.varlist.size do
+		self.varlist:set(i, @(old2new:getPointer(trace.varlist:get(i))))
+	end
+	m.destruct(old2new)
+end	
+
+terra GlobalTrace:__destruct()
+	m.destruct(self.vars)
+	m.destruct(self.varlist)
+	m.destruct(self.loopcounters)
+end
+
+terra GlobalTrace:lookupVariable(isstruct: bool)
+	-- How many times have we hit this lexical position (lexpos) before?
+	-- (Zero if never)
+	var lnump, foundlnum = self.loopcounters:getOrCreatePointer(callsiteStack)
+	if not foundlnum then @lnump = 0 end
+	var lnum = @lnump
+	-- We've now hit this lexpos one more time, so we increment
+	@lnump = @lnump + 1
+	-- Grab all variables corresponding to this lexpos
+	-- (getOrCreate means we will get an empty vector instead of nil)
+	var vlistp = (self.vars:getOrCreatePointer(callsiteStack))
+	self.lastVarList = vlistp
+	-- Return nil if no variables from this lexpos match the current loop num
+	if vlistp.size <= lnum then
+		return nil
+	end
+	-- Aha! We have a variable for this lexpos and loop num!
+	-- Now we just need to verify that the structural types match
+	var v = vlistp:get(lnum)
+	if v.isStructural == isstruct then
+		return v
+	else
+		return nil
+	end
+end
+
+terra GlobalTrace:varListPointer() : &Vector(&RandVar)
+	return &self.varlist
+end
+inheritance.virtual(GlobalTrace, "varListPointer")
+
+terra GlobalTrace:factor(num: double)
+	self.logprob = self.logprob + num
+end
+util.inline(GlobalTrace.methods.factor)
+
+terra GlobalTrace:condition(cond: bool)
+	self.conditionsSatisfied = self.conditionsSatisfied and cond
+end
+util.inline(GlobalTrace.methods.condition)
+
+m.addConstructors(GlobalTrace)
+
+
+
+
+
+
+-- The singleton global trace 
+local globalTrace = global(&GlobalTrace, nil)
+
+
+
+
+
+
 -- This is the normal, single trace that most inference uses.
 --    It has to specialize on the type of function that it's tracking.
 local RandExecTrace = templatize(function(ComputationType)
@@ -167,68 +265,36 @@ local RandExecTrace = templatize(function(ComputationType)
 		error("Can only do inference on computations with a single return value.")
 	end
 
-	local IdSeq = Vector(int)
-
 	-- TODO: The flat var list optimization idea from previous implementations
 
 	local struct Trace
 	{
 		computation: &ComputationType,
-		vars: HashMap(IdSeq, Vector(&RandVar)),
-		varlist: Vector(&RandVar),
-		loopcounters: HashMap(IdSeq, int),
-		lastVarList: &Vector(&RandVar),
 		returnValue: ComputationType.returns[1]
 	}
-	inheritance.dynamicExtend(BaseTrace, Trace)
+	inheritance.dynamicExtend(GlobalTrace, Trace)
 
-	terra Trace:__construct(comp: &ComputationType, doRejectInit: bool)
-		BaseTrace.__construct(self)
+	terra Trace:__construct(comp: &ComputationType)
+		GlobalTrace.__construct(self)
 		self.computation = comp
-		self.vars = [HashMap(IdSeq, Vector(&RandVar))].stackAlloc()
-		self.varlist = [Vector(&RandVar)].stackAlloc()
-		self.loopcounters = [HashMap(IdSeq, int)].stackAlloc()
-		self.lastVarList = nil
-		if doRejectInit then
-			-- Initialize the trace with rejection sampling
-			while not self.conditionsSatisfied do
-				-- Clear out the existing vars
-				var it = self.vars:iterator()
-				util.foreach(it, [quote
-					var vlistp = it:valPointer()
-					for i=0,vlistp.size do m.delete(vlistp:get(i)) end
-				end])
-				self.vars:clear()
-				-- Run the program forward
-				self:traceUpdate()
-			end
-	end
+		-- Initialize the trace with rejection sampling
+		while not self.conditionsSatisfied do
+			-- Clear out the existing vars
+			var it = self.vars:iterator()
+			util.foreach(it, [quote
+				var vlistp = it:valPointer()
+				for i=0,vlistp.size do m.delete(vlistp:get(i)) end
+			end])
+			self.vars:clear()
+			-- Run the program forward
+			self:traceUpdate()
+		end
 	end
 
 	terra Trace:__copy(trace: &Trace)
-		self:__construct(trace.computation, false)
-		BaseTrace.__copy(self, trace)
+		GlobalTrace.__copy(self, trace)
+		self.computation = trace.computation
 		self.returnValue = m.copy(trace.returnValue)
-		-- Copy vars
-		var old2new = [HashMap(&RandVar, &RandVar)].stackAlloc()
-		--    First copy the name --> var map
-		var it = trace.vars:iterator()
-		util.foreach(it, [quote
-			var k, v = it:keyvalPointer()
-			var vlistp = (self.vars:getOrCreatePointer(@k))
-			for i=0,v.size do
-				var oldvar = v:get(i)
-				var newvar = oldvar:deepcopy()
-				old2new:put(oldvar, newvar)
-				vlistp:push(newvar)
-			end
-		end])
-		--   Then copy the flat var list
-		self.varlist:resize(trace.varlist.size)
-		for i=0,trace.varlist.size do
-			self.varlist:set(i, @(old2new:getPointer(trace.varlist:get(i))))
-		end
-		m.destruct(old2new)
 	end
 
 	terra Trace:deepcopy() : &BaseTrace
@@ -238,25 +304,15 @@ local RandExecTrace = templatize(function(ComputationType)
 	end
 	inheritance.virtual(Trace, "deepcopy")
 
-	terra Trace:varListPointer() : &Vector(&RandVar)
-		return &self.varlist
-	end
-	inheritance.virtual(Trace, "varListPointer")
-
 	terra Trace:__destruct()
-		m.destruct(self.vars)
-		m.destruct(self.varlist)
-		m.destruct(self.loopcounters)
-		m.destruct(self.inactiveVarNames)
+		GlobalTrace.__destruct(self)
 		m.destruct(self.returnValue)
 	end
 
 	terra Trace:traceUpdate() : {}
 		-- Assume ownership of the global trace
 		var prevtrace = globalTrace
-		var prevHasGlobalTrace = haveGlobalTrace
 		globalTrace = self
-		haveGlobalTrace = true
 
 		self.logprob = 0.0
 		self.newlogprob = 0.0
@@ -302,57 +358,11 @@ local RandExecTrace = templatize(function(ComputationType)
 			end
 		end])
 
-		-- Reset the global trace datat
+		-- Reset the global trace data
 		globalTrace = prevtrace
-		haveGlobalTrace = prevHasGlobalTrace
 	end
 	inheritance.virtual(Trace, "traceUpdate")
 
-	terra Trace:lookupVariable(isstruct: bool)
-		-- How many times have we hit this lexical position (lexpos) before?
-		-- (Zero if never)
-		var lnump, foundlnum = self.loopcounters:getOrCreatePointer(callsiteStack)
-		if not foundlnum then @lnump = 0 end
-		var lnum = @lnump
-		-- We've now hit this lexpos one more time, so we increment
-		@lnump = @lnump + 1
-		-- Grab all variables corresponding to this lexpos
-		-- (getOrCreate means we will get an empty vector instead of nil)
-		var vlistp = (self.vars:getOrCreatePointer(callsiteStack))
-		self.lastVarList = vlistp
-		-- Return nil if no variables from this lexpos match the current loop num
-		if vlistp.size <= lnum then
-			return nil
-		end
-		-- Aha! We have a variable for this lexpos and loop num!
-		-- Now we just need to verify that the structural types match
-		var v = vlistp:get(lnum)
-		if v.isStructural == isstruct then
-			self.logprob = self.logprob + v.logprob
-			v.isActive = true
-			return v
-		else
-			return nil
-		end
-	end
-
-	terra Trace:addNewVariable(newvar: &RandVar)
-		self.logprob = self.logprob + newvar.logprob
-		self.newlogprob = self.newlogprob + newvar.logprob
-		-- Due to the bookkeeping we did in lookupVariable, the only thing
-		-- we have to do here is just push the new variables onto lastVarList
-		self.lastVarList:push(newvar)
-		-- (Also push to the flat list so we capture vars in order of creation)
-		self.varlist:push(newvar)
-	end
-
-	terra Trace:factor(num: double)
-		self.logprob = self.logprob + num
-	end
-
-	terra Trace:condition(cond: bool)
-		self.conditionsSatisfied = self.conditionsSatisfied and cond
-	end
 
 	m.addConstructors(Trace)
 	return Trace
@@ -360,26 +370,49 @@ local RandExecTrace = templatize(function(ComputationType)
 end)
 
 
+
+
+
+---- Functions exposed to external modules
+
 -- Caller assumes ownership of the returned trace
 local newTrace = macro(function(computation)
 	-- Assume computation is a function pointer
 	local comptype = computation:gettype().type
 	local TraceType = RandExecTrace(comptype)
-	return `TraceType.heapAlloc(computation, true)
+	return `TraceType.heapAlloc(computation)
 end)
 
-
-local lookupVariable = macro(function(isstruct)
-	return `globalTrace:lookupVariable(isstruct)
-end)
-
-local addNewVariable = macro(function(newvar)
-	return `globalTrace:addNewVariable(newvar)
-end)
+local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, params)
+	return quote
+		-- If there's no global trace, just return the value
+		if globalTrace == nil then
+			return [iscond and condVal or (`RandVarType.sample([params]))]
+		end
+		-- Otherwise, proceed with trace interactions.
+		var rv = [&RandVarType](globalTrace:lookupVariable(isstruct))
+		if rv ~= nil then
+			-- Check for changes that necessitate a logprob update
+			[iscond and (`rv:checkForUpdates(condVal, [params])) or (`rv:checkForUpdates([params]))]
+		else
+			-- Make new variable, add to master list of vars, add to newlogprob
+			rv = [iscond and (`RandVarType.heapAlloc(condVal, isstruct, iscond, [params])) or
+							 (`RandVarType.heapAlloc(isstruct, iscond, [params]))]
+			globalTrace.newlogprob = globalTrace.newlogprob + rv.logprob
+			globalTrace.lastVarList:push(rv)
+		end
+		-- Add to logprob, set active, add to flat list
+		rv.isActive = true
+		globalTrace.logprob = globalTrace.logprob + rv.logprob
+		globalTrace.varlist:push(rv)
+	in
+		rv.value
+	end
+end
 
 local factor = macro(function(num)
 	return quote
-		if haveGlobalTrace then
+		if globalTrace ~= nil then
 			globalTrace:factor(num)
 		end
 	end
@@ -387,7 +420,7 @@ end)
 
 local condition = macro(function(pred)
 	return quote
-		if haveGlobalTrace then
+		if globalTrace ~= nil then
 			globalTrace:condition(pred)
 		end
 	end
@@ -400,9 +433,7 @@ return
 	newTrace = newTrace,
 	BaseTrace = BaseTrace,
 	RandExecTrace = RandExecTrace,
-	globalTraceIsSet = globalTraceIsSet,
-	lookupVariable = lookupVariable,
-	addNewVariable = addNewVariable,
+	lookupVariableValue = lookupVariableValue,
 	factor = factor,
 	condition = condition
 }

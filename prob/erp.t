@@ -56,39 +56,19 @@ end)
 --      sample function we are using.
 --    * A sampling function. It may be overloaded, but all overloads must have the same return type
 --    * A log probability function
---    * (Optional) A proposal function
---    * (Optional) A proposal log probability function
-local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logProposalProb)
+--    * A proposal function
+--    * A proposal log probability function
+--    * ... Variadic arguments are the types of the parameters to the ERP (essentially specifying which overload
+--          of the provided functions we're using)
+local RandVarFromFunctions = templatize(function(sample, logprobfn, propose, logProposalProb, ...)
+	local paramtypes = {}
+	for i=1,select("#", ...) do table.insert(paramtypes, (select(i,...))) end
+
 	-- Can't handle functions with multiple return values
 	assert(#sample:getdefinitions()[1]:gettype().returns == 1)
 	-- All overloads of the sampling function must have the same return type
 	local ValType = sample:getdefinitions()[1]:gettype().returns[1]
 	for i=2,#sample:getdefinitions() do assert(sample:getdefinitions()[i]:gettype().returns[1] == ValType) end
-
-	-- If we don't have propose or logProposalProb functions, make macros for default
-	-- versions of these things given the functions we do have
-	if not propose then
-		-- Default: sample a new value irrespective of the current value (argument 1)
-		propose = macro(function(...)
-			local numargs = #paramtypes + 1
-			local args = {}
-			for i=2,numargs do
-				table.insert(args, (select(i,...)))
-			end
-			return `sample([args])
-		end)
-	end
-	if not logProposalProb then
-		-- Default: Score the proposed value irrespective of the current value
-		logProposalProb = macro(function(...)
-			local numargs = #paramtypes + 2
-			local args = {}
-			for i=2,numargs do
-				table.insert(args, (select(i,...)))
-			end
-			return `logprobfn([args])
-		end)
-	end
 
 	-- Initialize the class we're building
 	local struct RandVarFromFunctionsT {}
@@ -111,13 +91,30 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 		return exps
 	end
 
-	-- Constructor takes extra parameters
+	---- Constructors take extra parameters
+	-- Ctor 1: Take in a value argument 
 	local paramsyms = {}
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
 	terra RandVarFromFunctionsT:__construct(val: ValType, isstruct: bool, iscond: bool, [paramsyms])
 		[RandVarWithVal(ValType)].__construct(self, val, isstruct, iscond)
 		[genParamFieldsExpList(self)] = [paramsyms]
 		self:updateLogprob()
+	end
+	-- Ctor 2: No value argument, sample one instead
+	paramsyms = {}
+	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
+	terra RandVarFromFunctionsT:__construct(isstruct: bool, iscond: bool, [paramsyms])
+		var val = sample([paramsyms])
+		[RandVarWithVal(ValType)].__construct(self, val, isstruct, iscond)
+		[genParamFieldsExpList(self)] = [paramsyms]
+		self:updateLogprob()
+	end
+
+	-- Exposing the sample function
+	paramsyms = {}
+	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
+	RandVarFromFunctionsT.methods.sample = terra([paramsyms])
+		return sample([paramsyms])
 	end
 
 	-- Copy constructor...
@@ -153,6 +150,48 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 		[genDestructBlock(self)]
 	end
 
+	-- Check if we need to update log probabilities do to changes in:
+	--    1) Parameters
+	--    2) Conditioned value
+	local function checkParams(self, hasChanges)
+		local checkexps = {}
+		for i,p in ipairs(paramsyms) do
+			local n = paramFieldNames[i]
+			table.insert(checkexps,
+				quote
+					if not (self.[n] == p) then
+						m.destruct(self.[n])
+						self.[n] = m.copy(p)
+						hasChanges = true
+					end
+				end)
+		end
+		return checkexps
+	end
+	paramsyms = {}
+	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
+	terra RandVarFromFunctionsT:checkForUpdates([paramsyms])
+		var hasChanges = false
+		[checkParams(self, hasChanges)]
+		if hasChanges then
+			self:updateLogprob()
+		end
+	end
+	paramsyms = {}
+	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
+	terra RandVarFromFunctionsT:checkForUpdates(val: ValType, [paramsyms])
+		var hasChanges = false
+		[checkParams(self, hasChanges)]
+		if not (self.value == val) then
+			m.destruct(self.value)
+			self.value = m.copy(val)
+			hasChanges = true
+		end
+		if hasChanges then
+			self:updateLogprob()
+		end
+	end
+
 	-- Update log probability
 	terra RandVarFromFunctionsT:updateLogprob() : {}
 		self.logprob = logprobfn(self.value, [genParamFieldsExpList(self)])
@@ -172,7 +211,7 @@ local function RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logP
 
 	m.addConstructors(RandVarFromFunctionsT)
 	return RandVarFromFunctionsT
-end
+end)
 
 
 -- Make a new random primitive
@@ -183,99 +222,32 @@ end
 -- NOTE: Any and all parameter/value types must define the __eq operator!
 local function makeERP(sample, logprobfn, propose, logProposalProb)
 
-	local erpFnPair = templatize(function(...)
-
-		local paramtypes = {}
-		local paramsyms = {}
-		for i=1,select("#",...) do
-			local ptype = (select(i,...))
-			table.insert(paramtypes, ptype)
-			table.insert(paramsyms, symbol(ptype))
-		end
-
-		local RVType = RandVarFromFunctions(paramtypes, sample, logprobfn, propose, logProposalProb)
-
-		local function makeERPfn(iscond)
-
-			local val = iscond and symbol(RVType.ValType) or `sample([paramsyms])
-			local isstruct = symbol(bool)
-
-			local function checkParams(self, hasChanges)
-				local checkexps = {}
-				for i,p in ipairs(paramsyms) do
-					local n = string.format("param%d", i-1)
-					table.insert(checkexps,
-						quote
-							if not (self.[n] == p) then
-								self.[n] = p
-								hasChanges = true
-							end
-						end)
-				end
-				return checkexps
-			end
-
-			local function checkConditionedValue(self, val, hasChanges)
-				if iscond then
-					return quote
-						if self.value ~= val then
-							m.destruct(self.value)
-							self.value = m.copy(val)
-							[hasChanges] = true
-						end
-					end
-				else
-					return quote end
-				end
-			end
-
-			local body = quote
-				-- If there's no global trace (i.e. we're not in inference) just return val
-				if not trace.globalTraceIsSet() then
-					return val
-				end
-				-- Check if this random variable already exists
-				var randvar: &RandVar = nil
-				trace.lookupVariable(isstruct)
-				if randvar ~= nil then
-					-- The variable does exist. The logprob will need to
-					--    be updated if the conditioned value or any params
-					--    have changed
-					var rvart = [&RVType](randvar)
-					var hasChanges = false	
-					[checkParams(rvart, hasChanges)]
-					[checkConditionedValue(rvart, hasChanges)]
-					if hasChanges then
-						rvart:updateLogprob()
-					end
-				else
-					-- This variable doesn't yet exist, so create it
-					--    and stick it in the trace
-					randvar = RVType.heapAlloc(val, isstruct, iscond, [paramsyms])
-					trace.addNewVariable(randvar)
-				end
-				return ([&RVType](randvar)).value
-			end
-
-			if iscond then
-				return terra([isstruct], [val], [paramsyms])
-					[body]
-				end
-			else
-				return terra([isstruct], [paramsyms])
-					[body]
-				end
-			end
-		end
-
-		local ret = {}
-		ret[true] = makeERPfn(true)
-		ret[false] = makeERPfn(false)
-		return ret
-
-	end)
-
 	local numparams = #sample:getdefinitions()[1]:gettype().parameters
+
+	-- If we don't have propose or logProposalProb functions, make macros for default
+	-- versions of these things given the functions we do have
+	if not propose then
+		-- Default: sample a new value irrespective of the current value (argument 1)
+		propose = macro(function(...)
+			local numargs = numparams + 1
+			local args = {}
+			for i=2,numargs do
+				table.insert(args, (select(i,...)))
+			end
+			return `sample([args])
+		end)
+	end
+	if not logProposalProb then
+		-- Default: Score the proposed value irrespective of the current value
+		logProposalProb = macro(function(...)
+			local numargs = numparams + 2
+			local args = {}
+			for i=2,numargs do
+				table.insert(args, (select(i,...)))
+			end
+			return `logprobfn([args])
+		end)
+	end
 
 	-- We now default to true, because that seems more sensible
 	-- (i.e. it is always correct to call a variable structural, just
@@ -310,17 +282,12 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 		for i=1,numparams do table.insert(params, (select(i,...))) end
 		local paramtypes = {}
 		for _,p in ipairs(params) do table.insert(paramtypes, p:gettype()) end
-		local erpfns = erpFnPair(unpack(paramtypes))
 		local optstruct = (select(numparams+1, ...))
 		local iscond = getIsConditioned(optstruct)
-		local erpfn = erpfns[iscond]
 		local isstruct = getIsStructural(optstruct)
-		if iscond then
-			local val = `optstruct.conditionedValue
-			return `erpfn(isstruct, val, [params])
-		else
-			return `erpfn(isstruct, [params])
-		end
+		local condVal = iscond and `optstruct.conditionedValue or nil
+		local RandVarType = RandVarFromFunctions(sample, logprobfn, propose, logProposalProb, unpack(paramtypes))
+		return trace.lookupVariableValue(RandVarType, isstruct, iscond, condVal, params)
 	end)
 end
 
