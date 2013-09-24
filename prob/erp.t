@@ -52,15 +52,12 @@ end)
 
 
 -- Finally, at the bottom of the hierarchy, we have random primitives defined by a set of functions
---    * paramtypes: the types of the parameters to the ERP. Essentially tells us which overload of the sample
---      sample function we are using.
 --    * A sampling function. It may be overloaded, but all overloads must have the same return type
 --    * A log probability function
 --    * A proposal function
---    * A proposal log probability function
 --    * ... Variadic arguments are the types of the parameters to the ERP (essentially specifying which overload
 --          of the provided functions we're using)
-local RandVarFromFunctions = templatize(function(sample, logprobfn, propose, logProposalProb, ...)
+local RandVarFromFunctions = templatize(function(sample, logprobfn, propose, ...)
 	local paramtypes = {}
 	for i=1,select("#", ...) do table.insert(paramtypes, (select(i,...))) end
 
@@ -199,9 +196,7 @@ local RandVarFromFunctions = templatize(function(sample, logprobfn, propose, log
 
 	-- Propose new value
 	terra RandVarFromFunctionsT:proposeNewValue() : {double, double}
-		var newval = propose(self.value, [genParamFieldsExpList(self)])
-		var fwdPropLP = logProposalProb(self.value, newval, [genParamFieldsExpList(self)])
-		var rvsPropLP = logProposalProb(newval, self.value, [genParamFieldsExpList(self)])
+		var newval, fwdPropLP, rvsPropLP = propose(self.value, [genParamFieldsExpList(self)])
 		m.destruct(self.value)
 		self.value = newval
 		self:updateLogprob()
@@ -220,33 +215,31 @@ end)
 -- The macro expects all the parameters expected by 'sample', plus an (optional) anonymous struct
 --   which carries info such as 'isStructural', 'conditionedValue', etc.
 -- NOTE: Any and all parameter/value types must define the __eq operator!
-local function makeERP(sample, logprobfn, propose, logProposalProb)
+local function makeERP(sample, logprobfn, propose)
 
 	local numparams = #sample:getdefinitions()[1]:gettype().parameters
 
-	-- If we don't have propose or logProposalProb functions, make macros for default
-	-- versions of these things given the functions we do have
+	-- If we don't have propose function, make a default.
 	if not propose then
-		-- Default: sample a new value irrespective of the current value (argument 1)
-		propose = macro(function(...)
-			local numargs = numparams + 1
-			local args = {}
-			for i=2,numargs do
-				table.insert(args, (select(i,...)))
+		-- Default: sample and score a new value irrespective of the current value (argument 1)
+		for _,d in ipairs(sample:getdefinitions()) do
+			local valtype = d:gettype().returns[1]
+			local params = {}
+			for _,t in ipairs(d:gettype().parameters) do
+				table.insert(params, symbol(t))
 			end
-			return `sample([args])
-		end)
-	end
-	if not logProposalProb then
-		-- Default: Score the proposed value irrespective of the current value
-		logProposalProb = macro(function(...)
-			local numargs = numparams + 2
-			local args = {}
-			for i=2,numargs do
-				table.insert(args, (select(i,...)))
+			local fn = terra(currval: valtype, [params])
+				var newval = sample([params])
+				var fwdPropLP = logprobfn(newval, [params])
+				var rvsPropLP = logprobfn(currval, [params])
+				return newval, fwdPropLP, rvsPropLP
 			end
-			return `logprobfn([args])
-		end)
+			if not propose then
+				propose = fn
+			else
+				fn:adddefinition(fn:getdefinitions()[1])
+			end
+		end
 	end
 
 	-- We now default to true, because that seems more sensible
@@ -286,7 +279,7 @@ local function makeERP(sample, logprobfn, propose, logProposalProb)
 		local iscond = getIsConditioned(optstruct)
 		local isstruct = getIsStructural(optstruct)
 		local condVal = iscond and `optstruct.conditionedValue or nil
-		local RandVarType = RandVarFromFunctions(sample, logprobfn, propose, logProposalProb, unpack(paramtypes))
+		local RandVarType = RandVarFromFunctions(sample, logprobfn, propose, unpack(paramtypes))
 		return trace.lookupVariableValue(RandVarType, isstruct, iscond, condVal, params)
 	end)
 end
@@ -299,16 +292,17 @@ local erp = {makeERP = makeERP}
 erp.flip =
 makeERP(random.flip_sample(double),
 		random.flip_logprob(double),
-		terra(currval: double, p: double) if currval == 0 then return 1 else return 0 end end,
-		terra (currval: double, propval: double, p: double) return 0.0 end)
+		terra(currval: double, p: double)
+			if currval == 0 then
+				return 1, 0.0, 0.0
+			else
+				return 0, 0.0, 0.0
+			end
+		end)
 
 erp.uniform =
 makeERP(random.uniform_sample(double),
 		random.uniform_logprob(double))
-
-local C = terralib.includecstring [[
-#include <stdio.h>
-]]
 
 erp.multinomial =
 makeERP(random.multinomial_sample(double),
@@ -316,17 +310,15 @@ makeERP(random.multinomial_sample(double),
 	    terra(currval: int, params: Vector(double))
 	    	var newparams = m.copy(params)
 	    	newparams:set(currval, 0.0)
-	    	var ret = [random.multinomial_sample(double)](newparams)
+	    	var newval = [random.multinomial_sample(double)](newparams)
+	    	var fwdPropLP = [random.multinomial_logprob(double)](newval, newparams)
 	    	m.destruct(newparams)
-	    	return ret
-	    end,
-	    terra(currval: int, propval: int, params: Vector(double))
-	    	var newparams = m.copy(params)
-	    	newparams:set(currval, 0.0)
-	    	var ret = [random.multinomial_logprob(double)](propval, newparams)
+	    	newparams = m.copy(params)
+	    	newparams:set(newval, 0.0)
+	    	var rvsPropLP = [random.multinomial_logprob(double)](currval, newparams)
 	    	m.destruct(newparams)
-	    	return ret
-    	end)
+	    	return newval, fwdPropLP, rvsPropLP
+	    end)
 
 erp.multinomialDraw = macro(function(items, probs, opstruct)
 	opstruct = opstruct or `{}
@@ -346,10 +338,10 @@ erp.gaussian =
 makeERP(random.gaussian_sample(double),
 		random.gaussian_logprob(double),
 		terra(currval: double, mu: double, sigma: double)
-			return [random.gaussian_sample(double)](currval, sigma)
-		end,
-		terra(currval: double, propval: double, mu: double, sigma: double)
-			return [random.gaussian_logprob(double)](propval, currval, sigma)
+			var newval = [random.gaussian_sample(double)](currval, sigma)
+			var fwdPropLP = [random.gaussian_logprob(double)](newval, currval, sigma)
+			var rvsPropLP = [random.gaussian_logprob(double)](currval, newval, sigma)
+			return newval, fwdPropLP, rvsPropLP
 		end)
 
 erp.gamma =

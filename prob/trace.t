@@ -28,38 +28,43 @@ initGlobals()
 --    unique id to that call site.
 local nextid = 0
 local function pfn(fn)
-	-- Prerequisites: fn must not be overloaded
 	assert(terralib.isfunction(fn))
-	assert(#fn:getdefinitions() == 1)
-
-	-- Now do code gen
 	local myid = nextid
 	nextid = nextid + 1
-	local paramtypes = fn:getdefinitions()[1]:gettype().parameters
-	local returntypes = fn:getdefinitions()[1]:gettype().returns
-	local paramsyms = {}
-	for _,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-	local returnsyms = {}
-	for _,t in ipairs(returntypes) do table.insert(returnsyms, symbol(t)) end
-	local fnbody = nil
-	if #returntypes > 0 then
-		fnbody = quote
-			callsiteStack:push(myid)
-			var [returnsyms]
-			[returnsyms] = fn([paramsyms])
-			callsiteStack:pop()
-			return [returnsyms]
+	local wrapfn = nil
+	for _,d in ipairs(fn:getdefinitions()) do
+		local paramtypes = d:gettype().parameters
+		local returntypes = d:gettype().returns
+		local paramsyms = {}
+		for _,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
+		local returnsyms = {}
+		for _,t in ipairs(returntypes) do table.insert(returnsyms, symbol(t)) end
+		local fnbody = nil
+		if #returntypes > 0 then
+			fnbody = quote
+				callsiteStack:push(myid)
+				var [returnsyms]
+				[returnsyms] = fn([paramsyms])
+				callsiteStack:pop()
+				return [returnsyms]
+			end
+		else
+			fnbody = quote
+				callsiteStack:push(myid)
+				fn([paramsyms])
+				callsiteStack:pop()
+			end
 		end
-	else
-		fnbody = quote
-			callsiteStack:push(myid)
-			fn([paramsyms])
-			callsiteStack:pop()
+		local def = terra([paramsyms])
+			[fnbody]
+		end
+		if not wrapfn then
+			wrapfn = def
+		else
+			wrapfn:adddefinition(def:getdefinitions()[1])
 		end
 	end
-	return terra([paramsyms])
-		[fnbody]
-	end
+	return wrapfn
 end
 
 
