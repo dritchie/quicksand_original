@@ -75,17 +75,21 @@ specialize("flip_logprob", 1, function(V, P)
 	end
 end)
 
+local C = terralib.includecstring [[
+#include <stdio.h>
+]]
+
 specialize("multinomial_sample", 1, function(V, P)
 	return terra(params: Vector(P))
 		var sum = P(0.0)
 		for i=0,params.size do sum = sum + params:get(i) end
 		var result: int = 0
 		var x = random() * sum
-		var probAccum = 0.00000001
-		while result <= params.size and x > probAccum do
+		var probAccum = P(0.0)
+		repeat
 			probAccum = probAccum + params:get(result)
 			result = result + 1
-		end
+		until probAccum > x or result > params.size
 		return result - 1
 	end
 end)
@@ -156,7 +160,7 @@ specialize("gamma_sample", 2, function(V, P1, P2)
 			v = v*v*v
 			u = random()
 			if (u < 1.0 - .331*x*x*x*x) or (ad.math.log(u) < .5*x*x + d*(1.0 - v + ad.math.log(v))) then
-				return V(b*d*v)
+				return b*d*v
 			end
 		end
 	end

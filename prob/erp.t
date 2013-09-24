@@ -306,19 +306,23 @@ erp.uniform =
 makeERP(random.uniform_sample(double),
 		random.uniform_logprob(double))
 
+local C = terralib.includecstring [[
+#include <stdio.h>
+]]
+
 erp.multinomial =
 makeERP(random.multinomial_sample(double),
 	    random.multinomial_logprob(double),
 	    terra(currval: int, params: Vector(double))
 	    	var newparams = m.copy(params)
-	    	newparams:set(currval, 0)
+	    	newparams:set(currval, 0.0)
 	    	var ret = [random.multinomial_sample(double)](newparams)
 	    	m.destruct(newparams)
 	    	return ret
 	    end,
 	    terra(currval: int, propval: int, params: Vector(double))
 	    	var newparams = m.copy(params)
-	    	newparams:set(currval, 0)
+	    	newparams:set(currval, 0.0)
 	    	var ret = [random.multinomial_logprob(double)](propval, newparams)
 	    	m.destruct(newparams)
 	    	return ret

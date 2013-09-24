@@ -385,28 +385,31 @@ end)
 
 local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, params)
 	return quote
+		var retval: RandVarType.ValType
 		-- If there's no global trace, just return the value
 		if globalTrace == nil then
-			return [iscond and condVal or (`RandVarType.sample([params]))]
-		end
-		-- Otherwise, proceed with trace interactions.
-		var rv = [&RandVarType](globalTrace:lookupVariable(isstruct))
-		if rv ~= nil then
-			-- Check for changes that necessitate a logprob update
-			[iscond and (`rv:checkForUpdates(condVal, [params])) or (`rv:checkForUpdates([params]))]
+			retval = [iscond and condVal or (`RandVarType.sample([params]))]
 		else
-			-- Make new variable, add to master list of vars, add to newlogprob
-			rv = [iscond and (`RandVarType.heapAlloc(condVal, isstruct, iscond, [params])) or
-							 (`RandVarType.heapAlloc(isstruct, iscond, [params]))]
-			globalTrace.newlogprob = globalTrace.newlogprob + rv.logprob
-			globalTrace.lastVarList:push(rv)
+			-- Otherwise, proceed with trace interactions.
+			var rv = [&RandVarType](globalTrace:lookupVariable(isstruct))
+			if rv ~= nil then
+				-- Check for changes that necessitate a logprob update
+				[iscond and (`rv:checkForUpdates(condVal, [params])) or (`rv:checkForUpdates([params]))]
+			else
+				-- Make new variable, add to master list of vars, add to newlogprob
+				rv = [iscond and (`RandVarType.heapAlloc(condVal, isstruct, iscond, [params])) or
+								 (`RandVarType.heapAlloc(isstruct, iscond, [params]))]
+				globalTrace.newlogprob = globalTrace.newlogprob + rv.logprob
+				globalTrace.lastVarList:push(rv)
+			end
+			-- Add to logprob, set active, add to flat list
+			rv.isActive = true
+			globalTrace.logprob = globalTrace.logprob + rv.logprob
+			globalTrace.varlist:push(rv)
+			retval = m.copy(rv.value)
 		end
-		-- Add to logprob, set active, add to flat list
-		rv.isActive = true
-		globalTrace.logprob = globalTrace.logprob + rv.logprob
-		globalTrace.varlist:push(rv)
 	in
-		rv.value
+		retval
 	end
 end
 
