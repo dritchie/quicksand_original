@@ -87,6 +87,13 @@ local RandVarFromFunctions = templatize(function(sample, logprobfn, propose, ...
 		end
 		return exps
 	end
+	local function wrapExpListWithCopies(explist)
+		local ret = {}
+		for _,exp in ipairs(explist) do
+			table.insert(ret, `m.copy([exp]))
+		end
+		return ret
+	end
 
 	---- Constructors take extra parameters
 	-- Ctor 1: Take in a value argument 
@@ -94,7 +101,7 @@ local RandVarFromFunctions = templatize(function(sample, logprobfn, propose, ...
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
 	terra RandVarFromFunctionsT:__construct(val: ValType, isstruct: bool, iscond: bool, [paramsyms])
 		[RandVarWithVal(ValType)].__construct(self, val, isstruct, iscond)
-		[genParamFieldsExpList(self)] = [paramsyms]
+		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]
 		self:updateLogprob()
 	end
 	-- Ctor 2: No value argument, sample one instead
@@ -103,7 +110,7 @@ local RandVarFromFunctions = templatize(function(sample, logprobfn, propose, ...
 	terra RandVarFromFunctionsT:__construct(isstruct: bool, iscond: bool, [paramsyms])
 		var val = sample([paramsyms])
 		[RandVarWithVal(ValType)].__construct(self, val, isstruct, iscond)
-		[genParamFieldsExpList(self)] = [paramsyms]
+		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]
 		self:updateLogprob()
 	end
 
@@ -115,13 +122,6 @@ local RandVarFromFunctions = templatize(function(sample, logprobfn, propose, ...
 	end
 
 	-- Copy constructor...
-	local function wrapExpListWithCopies(explist)
-		local ret = {}
-		for _,exp in ipairs(explist) do
-			table.insert(ret, `m.copy([exp]))
-		end
-		return ret
-	end
 	terra RandVarFromFunctionsT:__copy(othervar: &RandVarFromFunctionsT)
 		[RandVarWithVal(ValType)].__copy(self, othervar)
 		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(genParamFieldsExpList(othervar))]

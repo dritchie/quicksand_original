@@ -109,6 +109,8 @@ powerLaw = pfn(powerLaw)
 
 local terra doTests()
 
+	C.printf("starting tests...\n")
+
 	-- ERP tests
 
 	[fwdtest(
@@ -406,6 +408,7 @@ local terra doTests()
 	end),
 	0.7599)]
 
+	C.printf("tests done!\n")
 end
 
 -- local prof = terralib.require("/Users/dritchie/Git/terra/tests/lib/prof")
