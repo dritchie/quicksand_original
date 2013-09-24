@@ -24,6 +24,14 @@ local terra initGlobals()
 end
 initGlobals()
 
+-- For debugging
+local terra printCallStack()
+	for i=0,callsiteStack.size do
+		C.printf("%d,", callsiteStack:get(i))
+	end
+	C.printf("\n")
+end
+
 -- Wrap a Terra function in another function that, when called, will assign a
 --    unique id to that call site.
 local nextid = 0

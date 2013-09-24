@@ -269,18 +269,42 @@ local function makeERP(sample, logprobfn, propose)
 		return false
 	end
 
-	-- Finally, return the macro which generates the ERP function call.
+	-- Generate an overloaded function which does the ERP call
+	local erpfn = nil
+	for _,d in ipairs(sample:getdefinitions()) do
+		local paramtypes = d:gettype().parameters
+		local rettype = d:gettype().returns[1]
+		local RandVarType = RandVarFromFunctions(sample, logprobfn, propose, unpack(paramtypes))
+		local params = {}
+		for _,t in ipairs(paramtypes) do table.insert(params, symbol(t)) end
+		-- First the conditioned version
+		local def = terra(isstruct: bool, condVal: rettype, [params])
+			return [trace.lookupVariableValue(RandVarType, isstruct, true, condVal, params)]
+		end
+		if not erpfn then erpfn = def else erpfn:adddefinition(def:getdefinitions()[1]) end
+		-- Then the unconditioned version
+		def = terra(isstruct: bool, [params])
+			return [trace.lookupVariableValue(RandVarType, isstruct, false, nil, params)]
+		end
+		erpfn:adddefinition(def:getdefinitions()[1])
+	end
+	-- The ERP must push an ID to the callsite stack.
+	erpfn = trace.pfn(erpfn)
+
+	-- Finally, wrap everything in a macro that extracts options from the
+	-- options struct.
 	return macro(function(...)
 		local params = {}
 		for i=1,numparams do table.insert(params, (select(i,...))) end
-		local paramtypes = {}
-		for _,p in ipairs(params) do table.insert(paramtypes, p:gettype()) end
 		local optstruct = (select(numparams+1, ...))
 		local iscond = getIsConditioned(optstruct)
 		local isstruct = getIsStructural(optstruct)
 		local condVal = iscond and `optstruct.conditionedValue or nil
-		local RandVarType = RandVarFromFunctions(sample, logprobfn, propose, unpack(paramtypes))
-		return trace.lookupVariableValue(RandVarType, isstruct, iscond, condVal, params)
+		if condVal then
+			return `erpfn(isstruct, condVal, [params])
+		else
+			return `erpfn(isstruct, [params])
+		end
 	end)
 end
 

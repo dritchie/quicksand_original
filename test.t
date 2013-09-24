@@ -88,7 +88,25 @@ local function lambda(func)
 	return func:getdefinitions()[1]:getpointer()
 end
 
-local counts = terralib.new(int[3], {0, 0, 0})
+-- ...but, I can't do recursive anonymous functions
+local terra powerLaw_tailrec(prob: double, x: int) : int
+	if [bool](flip(prob)) then
+		return x
+	else
+		return powerLaw_tailrec(prob, x+1)
+	end
+end
+powerLaw_tailrec = pfn(powerLaw_tailrec)
+local terra powerLaw(prob: double, x: int) : int
+	if [bool](flip(prob)) then
+		return x
+	else
+		return 0 + powerLaw(prob, x+1)
+	end
+end
+powerLaw = pfn(powerLaw)
+
+
 local terra doTests()
 
 	-- ERP tests
@@ -368,12 +386,25 @@ local terra doTests()
 		end))]
 		condition(observe(hyp) == 0)
 		m.destruct(probs)
-		counts[hyp] = counts[hyp] + 1
 		return [int](hyp == 0)
 	end),
 	0.357)]
-	var sumcounts = [double](counts[0] + counts[1] + counts[2])
-	C.printf("%g, %g, %g\n", counts[0]/sumcounts, counts[1]/sumcounts, counts[2]/sumcounts)
+
+	[mhtest(
+	"recursive stochastic fn, unconditioned (tail recursive)",
+	pfn(terra() : double
+		var a = powerLaw_tailrec(0.3, 1)
+		return [int](a < 5)
+	end),
+	0.7599)]
+
+	[mhtest(
+	"recursive stochastic fn, unconditioned",
+	pfn(terra() : double
+		var a = powerLaw(0.3, 1)
+		return [int](a < 5)
+	end),
+	0.7599)]
 
 end
 
