@@ -2,6 +2,7 @@ local modules = {}
 table.insert(modules, terralib.require("prob.erp"))
 table.insert(modules, terralib.require("prob.trace"))
 table.insert(modules, terralib.require("prob.inference"))
+table.insert(modules, terralib.require("prob.memoize"))
 
 -- Forward exports
 local exports = {}

@@ -418,6 +418,19 @@ local terra doTests()
 	end,
 	0.7599)]
 
+	[mhtest(
+	"memoized flip, unconditioned",
+	terra() : double
+		var proc = [mem(terra(x: int) return [bool](flip(0.8)) end)]
+		var p11 = proc(1)	
+		var p21 = proc(2)
+		var p12 = proc(1)
+		var p22 = proc(2)
+		m.destruct(proc)
+		return [int](p11 and p21 and p22)
+	end,
+	0.64)]
+
 	C.printf("tests done!\n")
 end
 
