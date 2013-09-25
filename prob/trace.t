@@ -36,56 +36,67 @@ end
 --    unique id to that call site.
 -- There's some indirection trickery going on here to deal with
 --    recursive functions.
-local function peektype(fndef)
-	local success, typ = fndef:peektype()
-	if not success then
-		-- TODO: I would really like to check if this function is already
-		--    compiling, and if so, throw an error here.
-		-- (Something like "Recursive functions need explicit return types").
-		-- The API does not expose any way to check this, though...
-		typ = fndef:gettype()
-	end
-	return typ
-end
 local function isValidProbFn(fn)
 	-- Prerequisites: fn must be a terra function, and if it is overloaded,
 	-- all overloads must have the same number of return types
 	assert(terralib.isfunction(fn))
-	local numrets = #peektype(fn:getdefinitions()[1]).returns
+	local s, t = fn:getdefinitions()[1]:peektype()
+	local numrets = #t.returns
 	for i=2,#fn:getdefinitions() do
-		assert(#peektype(fn:getdefinitions()[i]).returns == numrets)
+		s, t = fn:getdefinitions()[i]:peektype()
+		assert(#t.returns == numrets)
 	end
 end
 local nextid = 0
 local function pfn(fn)
 	local data = { definition = fn }
 	local ret = macro(function(...)
-		isValidProbFn(data.definition)
 		local myid = nextid
 		nextid = nextid + 1
 		local args = {}
 		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
 		local argintermediates = {}
 		for _,a in ipairs(args) do table.insert(argintermediates, symbol(a:gettype())) end
-		local numrets = #peektype(data.definition:getdefinitions()[1]).returns
-		if numrets == 0 then
-			return quote
-				var [argintermediates] = [args]
-				callsiteStack:push(myid)
-				[data.definition]([argintermediates])
-				callsiteStack:pop()
+		-- We fire this function when we know the type of data.definition.
+		-- This may require the function to be compiled.
+		local function whenTypeKnown()
+			data.isCompiling = false
+			isValidProbFn(data.definition)
+			local s, typ = data.definition:peektype()
+			local numrets = #typ.returns
+			if numrets == 0 then
+				return quote
+					var [argintermediates] = [args]
+					callsiteStack:push(myid)
+					[data.definition]([argintermediates])
+					callsiteStack:pop()
+				end
+			else
+				local results = {}
+				for i=1,numrets do table.insert(results, symbol()) end
+				return quote
+					var [argintermediates] = [args]
+					callsiteStack:push(myid)
+					var [results] = [data.definition]([argintermediates])
+					callsiteStack:pop()
+				in
+					[results]
+				end
 			end
+		end
+		-- At this point, we need to get the type of the function being wrapped.
+		-- However, it may already be compiling (if it's a recursive function).
+		-- In this case, we attempt to peektype. If this fails, then we report
+		--    a useful error
+		local success, typ = data.definition:peektype()
+		if success then
+			return whenTypeKnown()
+		elseif not data.isCompiling then
+			data.isCompiling = true
+			data.definition:compile()
+			return whenTypeKnown()
 		else
-			local results = {}
-			for i=1,numrets do table.insert(results, symbol()) end
-			return quote
-				var [argintermediates] = [args]
-				callsiteStack:push(myid)
-				var [results] = [data.definition]([argintermediates])
-				callsiteStack:pop()
-			in
-				[results]
-			end
+			error("Recursive probabilistic functions must have explicitly annotated return types.")
 		end
 	end)
 	ret.data = data
