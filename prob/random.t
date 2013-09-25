@@ -75,10 +75,6 @@ specialize("flip_logprob", 1, function(V, P)
 	end
 end)
 
-local C = terralib.includecstring [[
-#include <stdio.h>
-]]
-
 specialize("multinomial_sample", 1, function(V, P)
 	return terra(params: Vector(P))
 		var sum = P(0.0)
@@ -103,16 +99,6 @@ specialize("multinomial_logprob", 1, function(V, P)
 		for i=0,params.size do
 			sum = sum + params:get(i)
 		end
-		-- C.printf("--------------\n")
-		-- C.printf("params:    ")
-		-- for i=0,params.size do
-		-- 	C.printf("%g, ", params:get(i))
-		-- end
-		-- C.printf("\n")
-		-- C.printf("params[val]:    %g\n", params:get(val))
-		-- C.printf("sum:    %g\n", sum)
-		-- C.printf("params[val]/sum:    %g\n", params:get(val)/sum)
-		-- C.printf("log(params[val]/sum):    %g\n", ad.math.log(params:get(val)/sum))
 		return ad.math.log(params:get(val)/sum)
 	end
 end)

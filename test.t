@@ -81,30 +81,40 @@ local function eqtest(name, estimatedValues, trueValues)
 	end
 end
 
--- Hack to get around Terra not having closures/inner functions
-local fns = {}	-- To make sure functions don't get gc'd.
-local function lambda(func)
-	table.insert(fns, func)
-	return func:getdefinitions()[1]:getpointer()
+-- Convenience hack to define functions 'inside' other functions
+local fns = {}
+local function def(fnname, fn)
+	fns[fnname] = fn
+	return quote end
+end
+local function call(fnname, ...)
+	local fn = fns[fnname]
+	if select("#",...) == 0 then
+		return `fn()
+	else
+		local args = {}
+		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
+		return `fn([args])
+	end
 end
 
--- ...but, I can't do recursive anonymous functions
-local terra powerLaw_tailrec(prob: double, x: int) : int
+-- Recursive function definitions
+local powerLaw_tailrec
+powerLaw_tailrec = pfn(terra(prob: double, x: int) : int
 	if [bool](flip(prob)) then
 		return x
 	else
 		return powerLaw_tailrec(prob, x+1)
 	end
-end
-powerLaw_tailrec = pfn(powerLaw_tailrec)
-local terra powerLaw(prob: double, x: int) : int
+end)
+local powerLaw
+powerLaw = pfn(terra(prob: double, x: int) : int
 	if [bool](flip(prob)) then
 		return x
 	else
 		return 0 + powerLaw(prob, x+1)
 	end
-end
-powerLaw = pfn(powerLaw)
+end)
 
 
 local terra doTests()
@@ -122,9 +132,9 @@ local terra doTests()
 
 	[mhtest(
 	"flip query",
-	pfn(terra() : double
+	terra() : double
 		return flip(0.7)
-	end),
+	end,
 	0.7)]
 
 	[fwdtest(
@@ -136,9 +146,9 @@ local terra doTests()
 
 	[mhtest(
 	"uniform query",
-	pfn(terra() : double
+	terra() : double
 		return uniform(0.1, 0.4)
-	end),
+	end,
 	0.5*(.1+.4))]
 
 	[fwdtest(
@@ -155,14 +165,14 @@ local terra doTests()
 
 	[mhtest(
 	"multinomial query",
-	pfn(terra() : double
+	terra() : double
 		var items = Vector.fromItems(.2, .3, .4)
 		var probs = Vector.fromItems(.2, .6, .2)
 		var ret = multinomialDraw(items, probs)
 		m.destruct(items)
 		m.destruct(probs)
 		return ret
-	end),
+	end,
 	0.2*.2 + 0.6*.3 + 0.2*.4)]
 
 	[eqtest(
@@ -183,9 +193,9 @@ local terra doTests()
 
 	[mhtest(
 	"gaussian query",
-	pfn(terra() : double
+	terra() : double
 		return gaussian(0.1, 0.5)
-	end),
+	end,
 	0.1)]
 
 	[eqtest(
@@ -206,9 +216,9 @@ local terra doTests()
 
 	[mhtest(
 	"gamma query",
-	pfn(terra() : double
+	terra() : double
 		return gamma(2.0, 2.0)/10.0
-	end),
+	end,
 	0.4)]
 
 	[eqtest(
@@ -229,9 +239,9 @@ local terra doTests()
 
 	[mhtest(
 	"beta query",
-	pfn(terra() : double
+	terra() : double
 		return beta(2.0, 5.0)
-	end),
+	end,
 	2.0/(2+5))]
 
 	[eqtest(
@@ -252,9 +262,9 @@ local terra doTests()
 
 	[mhtest(
 	"binomial query",
-	pfn(terra() : double
+	terra() : double
 		return binomial(0.5, 40.0)/40.0
-	end),
+	end,
 	0.5)]
 
 	[eqtest(
@@ -275,9 +285,9 @@ local terra doTests()
 
 	[mhtest(
 	"poisson query",
-	pfn(terra() : double
+	terra() : double
 		return poisson(4.0)/10.0
-	end),
+	end,
 	0.4)]
 
 	[eqtest(
@@ -294,37 +304,37 @@ local terra doTests()
 
 	[mhtest(
 	"setting a flip",
-	pfn(terra() : double
+	terra() : double
 		var a = 1.0/1000
 		condition([bool](flip(a)))
 		return a
-	end),
+	end,
 	1.0/1000)]
 
 	[mhtest(
 	"and conditioned on or",
-	pfn(terra() : double
+	terra() : double
 		var a = [bool](flip(0.5))
 		var b = [bool](flip(0.5))
 		condition(a or b)
 		return [int](a and b)
-	end),
+	end,
 	1.0/3)]
 
 	[mhtest(
 	"and conditioned on or, biased flip",
-	pfn(terra() : double
+	terra() : double
 		var a = [bool](flip(0.3))
 		var b = [bool](flip(0.3))
 		condition(a or b)
 		return [int](a and b)
-	end),
+	end,
 	(0.3*0.3) / (0.3*0.3 + 0.7*0.3 + 0.3*0.7))]
 
 	[mhtest(
 	"conditioned flip",
-	pfn(terra() : double
-		var bitflip = [lambda(pfn(terra(fidelity: double, x: int)
+	terra() : double
+		[def("bitflip", pfn(terra(fidelity: double, x: int)
 			if [bool](x) then
 				return flip(fidelity)
 			else
@@ -332,25 +342,25 @@ local terra doTests()
 			end
 		end))]
 		var hyp = flip(0.7)
-		condition([bool](bitflip(0.8, hyp)))
+		condition([bool]([call("bitflip", 0.8, hyp)]))
 		return hyp
-	end),
+	end,
 	(0.7*0.8) / (0.7*0.8 + 0.3*0.2))]
 
 	[mhtest(
 	"random 'if' with random branches, unconditioned",
-	pfn(terra() : double
+	terra() : double
 		if [bool](flip(0.7)) then
 			return flip(0.2)
 		else
 			return flip(0.8)
 		end
-	end),
+	end,
 	0.7*0.2 + 0.3*0.8)]
 
 	[mhtest(
 	"flip with random weight, unconditioned",
-	pfn(terra() : double
+	terra() : double
 		var weight: double
 		if [bool](flip(0.7)) then
 			weight = 0.2
@@ -358,54 +368,54 @@ local terra doTests()
 			weight = 0.8
 		end
 		return flip(weight)
-	end),
+	end,
 	0.7*0.2 + 0.3*0.8)]
 
 	[mhtest(
 	"random procedure application, unconditioned",
-	pfn(terra() : double
-		var proc : {} -> {int}
+	terra() : double
+		[def("rpa1", pfn(terra() return flip(0.2) end))]
+		[def("rpa2", pfn(terra() return flip(0.8) end))]
 		if [bool](flip(0.7)) then
-			proc = [lambda(pfn(terra() return flip(0.2) end))]
+			return [call("rpa1")]
 		else
-			proc = [lambda(pfn(terra() return flip(0.8) end))]
+			return [call("rpa2")]
 		end
-		return proc()
-	end),
+	end,
 	0.7*0.2 + 0.3*0.8)]
 
 	[mhtest(
 	"conditioned multinomial",
-	pfn(terra() : double
+	terra() : double
 		var probs = Vector.fromItems(.1, .6, .3)
 		var hyp = multinomial(probs)
-		var observe = [lambda(pfn(terra(x: int)
+		[def("observe", pfn(terra(x: int)
 			if [bool](flip(0.8)) then
 				return x
 			else
 				return 0
 			end
 		end))]
-		condition(observe(hyp) == 0)
+		condition([call("observe", hyp)] == 0)
 		m.destruct(probs)
 		return [int](hyp == 0)
-	end),
+	end,
 	0.357)]
 
 	[mhtest(
 	"recursive stochastic fn, unconditioned (tail recursive)",
-	pfn(terra() : double
+	terra() : double
 		var a = powerLaw_tailrec(0.3, 1)
 		return [int](a < 5)
-	end),
+	end,
 	0.7599)]
 
 	[mhtest(
 	"recursive stochastic fn, unconditioned",
-	pfn(terra() : double
+	terra() : double
 		var a = powerLaw(0.3, 1)
 		return [int](a < 5)
-	end),
+	end,
 	0.7599)]
 
 	C.printf("tests done!\n")

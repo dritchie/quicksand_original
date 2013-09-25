@@ -93,6 +93,11 @@ terra RandomWalkKernel:next(currTrace: &BaseTrace)
 			rvsPropLP = rvsPropLP + nextTrace.oldlogprob - C.log(newNumVars)
 		end
 		var acceptThresh = nextTrace.logprob - currTrace.logprob + rvsPropLP - fwdPropLP
+		-- C.printf("--------------------------\n")
+		-- C.printf("currTrace.logprob:    %g\n", currTrace.logprob)
+		-- C.printf("nextTrace.logprob:    %g\n", nextTrace.logprob)
+		-- C.printf("fwdPropLP:    %g\n", fwdPropLP)
+		-- C.printf("rvsPropLP:    %g\n", rvsPropLP)
 		if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
 			self.proposalsAccepted = self.proposalsAccepted + 1
 			m.delete(currTrace)

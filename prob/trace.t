@@ -32,47 +32,44 @@ local terra printCallStack()
 	C.printf("\n")
 end
 
--- Wrap a Terra function in another function that, when called, will assign a
+-- Wrap a Terra function in a macro that, when called, will assign a
 --    unique id to that call site.
 local nextid = 0
 local function pfn(fn)
+	-- Prerequisites: fn must be a terra function, and if it is overloaded,
+	-- all overloads must have the same number of return types
 	assert(terralib.isfunction(fn))
-	local myid = nextid
-	nextid = nextid + 1
-	local wrapfn = nil
-	for _,d in ipairs(fn:getdefinitions()) do
-		local paramtypes = d:gettype().parameters
-		local returntypes = d:gettype().returns
-		local paramsyms = {}
-		for _,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-		local returnsyms = {}
-		for _,t in ipairs(returntypes) do table.insert(returnsyms, symbol(t)) end
-		local fnbody = nil
-		if #returntypes > 0 then
-			fnbody = quote
-				callsiteStack:push(myid)
-				var [returnsyms]
-				[returnsyms] = fn([paramsyms])
-				callsiteStack:pop()
-				return [returnsyms]
-			end
-		else
-			fnbody = quote
-				callsiteStack:push(myid)
-				fn([paramsyms])
-				callsiteStack:pop()
-			end
-		end
-		local def = terra([paramsyms])
-			[fnbody]
-		end
-		if not wrapfn then
-			wrapfn = def
-		else
-			wrapfn:adddefinition(def:getdefinitions()[1])
-		end
+	local numrets = #fn:getdefinitions()[1]:gettype().returns
+	for i=2,#fn:getdefinitions() do
+		assert(#fn:getdefinitions()[i]:gettype().returns == numrets)
 	end
-	return wrapfn
+	return macro(function(...)
+		local myid = nextid
+		nextid = nextid + 1
+		local args = {}
+		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
+		local argintermediates = {}
+		for _,a in ipairs(args) do table.insert(argintermediates, symbol(a:gettype())) end
+		if numrets == 0 then
+			return quote
+				var [argintermediates] = [args]
+				callsiteStack:push(myid)
+				fn([argintermediates])
+				callsiteStack:pop()
+			end
+		else
+			local results = {}
+			for i=1,numrets do table.insert(results, symbol()) end
+			return quote
+				var [argintermediates] = [args]
+				callsiteStack:push(myid)
+				var [results] = fn([argintermediates])
+				callsiteStack:pop()
+			in
+				[results]
+			end
+		end
+	end)
 end
 
 
@@ -326,6 +323,8 @@ local RandExecTrace = templatize(function(ComputationType)
 		-- Assume ownership of the global trace
 		var prevtrace = globalTrace
 		globalTrace = self
+
+		-- C.printf("%d\n", self.vars.size)
 
 		self.logprob = 0.0
 		self.newlogprob = 0.0
