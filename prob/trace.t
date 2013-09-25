@@ -51,18 +51,24 @@ local nextid = 0
 local function pfn(fn)
 	local data = { definition = fn }
 	local ret = macro(function(...)
+		-- Every call gets a unique id
 		local myid = nextid
 		nextid = nextid + 1
 		local args = {}
 		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
 		local argintermediates = {}
 		for _,a in ipairs(args) do table.insert(argintermediates, symbol(a:gettype())) end
-		-- We fire this function when we know the type of data.definition.
-		-- This may require the function to be compiled.
-		local function whenTypeKnown()
-			data.isCompiling = false
+		-- Does the function have an explicitly annotated return type?
+		local success, typ = data.definition:peektype()
+		-- If not, attempt to compile to determine the type
+		if not success then typ = data.definition:gettype(true) end
+		-- If this fails (asynchronous gettype returns nil), then we know we must have
+		--    a recursive dependency.
+		if not typ then
+			error("Recursive probabilistic functions must have explicitly annotated return types.")
+		else
+			-- Generate code!
 			isValidProbFn(data.definition)
-			local s, typ = data.definition:peektype()
 			local numrets = #typ.returns
 			if numrets == 0 then
 				return quote
@@ -84,24 +90,18 @@ local function pfn(fn)
 				end
 			end
 		end
-		-- At this point, we need to get the type of the function being wrapped.
-		-- However, it may already be compiling (if it's a recursive function).
-		-- In this case, we attempt to peektype. If this fails, then we report
-		--    a useful error
-		local success, typ = data.definition:peektype()
-		if success then
-			return whenTypeKnown()
-		elseif not data.isCompiling then
-			data.isCompiling = true
-			data.definition:compile()
-			return whenTypeKnown()
-		else
-			error("Recursive probabilistic functions must have explicitly annotated return types.")
-		end
 	end)
+	-- Provide mechanisms for the function to be defined after it has been declared
+	-- This essentially provides a 'fix' operator for defining recursive functions.
 	ret.data = data
 	ret.define = function(self, fn)
 		self.data.definition = fn
+	end
+	-- We also need these wrapped functions to be able to expose their types, so that
+	--    other code gen routines that expect functions can work with them.
+	-- The simplest thing to do is just to forward the function definitions.
+	ret.getdefinitions = function(self)
+		return self.data.definition:getdefinitions()
 	end
 	return ret
 end
