@@ -355,7 +355,7 @@ local RandExecTrace = templatize(function(ComputationType)
 	end
 
 	terra Trace:traceUpdate() : {}
-		-- C.printf("------------\n")
+		-- C.printf("======================\n")
 		-- Assume ownership of the global trace
 		var prevtrace = globalTrace
 		globalTrace = self
@@ -393,7 +393,7 @@ local RandExecTrace = templatize(function(ComputationType)
 			-- For common use cases (e.g. variables created in loops),
 			-- iterating from last var to first will make removal more
 			-- efficient (it'll just be a pop() in most cases)
-			for i=vlistp.size-1,-1,-1 do
+			for i=[int](vlistp.size-1),-1,-1 do
 				var vp = vlistp:get(i)
 				if not vp.isActive then
 					self.oldlogprob = self.oldlogprob + vp.logprob

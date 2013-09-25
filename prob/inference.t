@@ -88,9 +88,9 @@ terra RandomWalkKernel:next(currTrace: &BaseTrace)
 		nextTrace:traceUpdate()
 		if nextTrace.newlogprob ~= 0.0 or nextTrace.oldlogprob ~= 0.0 then
 			var oldNumVars = numvars
-			var newNumVars = freevars.size
-			fwdPropLP = fwdPropLP + nextTrace.newlogprob - C.log(oldNumVars)
-			rvsPropLP = rvsPropLP + nextTrace.oldlogprob - C.log(newNumVars)
+			var newNumVars = nextTrace:numFreeVars(self.structs, self.nonstructs)
+			fwdPropLP = fwdPropLP + nextTrace.newlogprob - C.log([double](oldNumVars))
+			rvsPropLP = rvsPropLP + nextTrace.oldlogprob - C.log([double](newNumVars))
 		end
 		var acceptThresh = nextTrace.logprob - currTrace.logprob + rvsPropLP - fwdPropLP
 		-- C.printf("--------------------------\n")
@@ -98,10 +98,14 @@ terra RandomWalkKernel:next(currTrace: &BaseTrace)
 		-- C.printf("nextTrace.logprob:    %g\n", nextTrace.logprob)
 		-- C.printf("fwdPropLP:    %g\n", fwdPropLP)
 		-- C.printf("rvsPropLP:    %g\n", rvsPropLP)
+		-- C.printf("oldNumVars:    %d\n", oldNumVars)
+		-- C.printf("newNumVars:    %d\n", newNumVars)
 		if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
+			-- C.printf("ACCEPTED\n")
 			self.proposalsAccepted = self.proposalsAccepted + 1
 			m.delete(currTrace)
 		else
+			-- C.printf("REJECTED\n")
 			m.delete(nextTrace)
 			nextTrace = currTrace
 		end
