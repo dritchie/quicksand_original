@@ -34,27 +34,45 @@ end
 
 -- Wrap a Terra function in a macro that, when called, will assign a
 --    unique id to that call site.
-local nextid = 0
-local function pfn(fn)
+-- There's some indirection trickery going on here to deal with
+--    recursive functions.
+local function peektype(fndef)
+	local success, typ = fndef:peektype()
+	if not success then
+		-- TODO: I would really like to check if this function is already
+		--    compiling, and if so, throw an error here.
+		-- (Something like "Recursive functions need explicit return types").
+		-- The API does not expose any way to check this, though...
+		typ = fndef:gettype()
+	end
+	return typ
+end
+local function isValidProbFn(fn)
 	-- Prerequisites: fn must be a terra function, and if it is overloaded,
 	-- all overloads must have the same number of return types
 	assert(terralib.isfunction(fn))
-	local numrets = #fn:getdefinitions()[1]:gettype().returns
+	local numrets = #peektype(fn:getdefinitions()[1]).returns
 	for i=2,#fn:getdefinitions() do
-		assert(#fn:getdefinitions()[i]:gettype().returns == numrets)
+		assert(#peektype(fn:getdefinitions()[i]).returns == numrets)
 	end
-	return macro(function(...)
+end
+local nextid = 0
+local function pfn(fn)
+	local data = { definition = fn }
+	local ret = macro(function(...)
+		isValidProbFn(data.definition)
 		local myid = nextid
 		nextid = nextid + 1
 		local args = {}
 		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
 		local argintermediates = {}
 		for _,a in ipairs(args) do table.insert(argintermediates, symbol(a:gettype())) end
+		local numrets = #peektype(data.definition:getdefinitions()[1]).returns
 		if numrets == 0 then
 			return quote
 				var [argintermediates] = [args]
 				callsiteStack:push(myid)
-				fn([argintermediates])
+				[data.definition]([argintermediates])
 				callsiteStack:pop()
 			end
 		else
@@ -63,13 +81,18 @@ local function pfn(fn)
 			return quote
 				var [argintermediates] = [args]
 				callsiteStack:push(myid)
-				var [results] = fn([argintermediates])
+				var [results] = [data.definition]([argintermediates])
 				callsiteStack:pop()
 			in
 				[results]
 			end
 		end
 	end)
+	ret.data = data
+	ret.define = function(self, fn)
+		self.data.definition = fn
+	end
+	return ret
 end
 
 
@@ -210,6 +233,7 @@ terra GlobalTrace:__destruct()
 end
 
 terra GlobalTrace:lookupVariable(isstruct: bool)
+	-- printCallStack()
 	-- How many times have we hit this lexical position (lexpos) before?
 	-- (Zero if never)
 	var lnump, foundlnum = self.loopcounters:getOrCreatePointer(callsiteStack)
@@ -320,11 +344,10 @@ local RandExecTrace = templatize(function(ComputationType)
 	end
 
 	terra Trace:traceUpdate() : {}
+		-- C.printf("------------\n")
 		-- Assume ownership of the global trace
 		var prevtrace = globalTrace
 		globalTrace = self
-
-		-- C.printf("%d\n", self.vars.size)
 
 		self.logprob = 0.0
 		self.newlogprob = 0.0
