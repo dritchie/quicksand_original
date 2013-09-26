@@ -248,13 +248,16 @@ local MAP = templatize(function(RetValType)
 end)
 
 -- Draw a sample from a computation via rejection
-local rejectionSample = macro(function(computation)
+local function rejectionSample(computation)
 	return quote
-		var tr = trace.newTrace(computation)
+		var comp = computation
+		var tr = trace.newTrace(comp)
+		var retval = tr.returnValue
+		m.delete(tr)
 	in
-		tr.returnValue
+		retval
 	end
-end)
+end
 
 
 return

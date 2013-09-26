@@ -86,12 +86,7 @@ local MultiTypeMemberStruct = templatize(function(...)
 	return aggregate
 end)
 
--- Memoize a terra function (or macro that forwards function definitions)
--- Returns an instance of a struct with an __apply metamethod.
--- The struct stores argument/result pairs in a hash map
--- There is one hash map for every overload of the original function.
--- NOTE: The caller of mem assumes responsibility for destructing the returned struct.
-local function mem(fn)
+local MemFn = templatize(function(fn)
 	-- Some helpers
 	local function aggregates(fndef)
 		local t = fndef:gettype()
@@ -147,7 +142,14 @@ local function mem(fn)
 	end)
 
 	m.addConstructors(MemFn)
-	return `MemFn.stackAlloc()
+	return MemFn
+end)
+
+-- Memoize a terra function (or macro that forwards function definitions)
+-- NOTE: caller takes ownership of return object's memory.
+local function mem(fn)
+	local MemFnType = MemFn(fn)
+	return `MemFnType.stackAlloc()
 end
 
 

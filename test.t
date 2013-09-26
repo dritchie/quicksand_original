@@ -8,7 +8,14 @@ util.openModule(prob)
 local C = terralib.includecstring [[
 #include <stdio.h>
 #include <math.h>
+#include <stdlib.h>
+#include <sys/time.h>
 inline void flush() { fflush(stdout); }
+double currentTimeInSeconds() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec + tv.tv_usec / 1000000.0;
+}
 ]]
 
 local numsamps = 150
@@ -120,6 +127,8 @@ end)
 local terra doTests()
 
 	C.printf("starting tests...\n")
+
+	var t1 = C.currentTimeInSeconds()
 
 	-- ERP tests
 
@@ -421,7 +430,7 @@ local terra doTests()
 	[mhtest(
 	"memoized flip, unconditioned",
 	terra() : double
-		var proc = [mem(terra(x: int) return [bool](flip(0.8)) end)]
+		var proc = [mem(pfn(terra(x: int) return [bool](flip(0.8)) end))]
 		var p11 = proc(1)	
 		var p21 = proc(2)
 		var p12 = proc(1)
@@ -431,7 +440,155 @@ local terra doTests()
 	end,
 	0.64)]
 
+	[mhtest(
+	"memoized flip, conditioned",
+	terra() : double
+		var proc = [mem(pfn(terra(x: int) return [bool](flip(0.2)) end))]
+		var p1 = proc(1)	
+		var p21 = proc(2)
+		var p22 = proc(2)
+		var p23 = proc(2)
+		condition(p1 or p21 or p22 or p23)
+		var ret = [int](proc(1))
+		m.destruct(proc)
+		return ret
+	end,
+	0.5555555555555555)]
+
+	-- Not quite equivalent to the Church test, but that version is not
+	-- expressable in this language (lack of proper closures)
+	[mhtest(
+	"bound symbol used inside memoizer, unconditioned",
+	terra() : double
+		var a = flip(0.8)
+		var proc = [mem(pfn(terra(a: int) return [bool](a) end))]
+		var p11 = proc(a)
+		var p12 = proc(a)
+		m.destruct(proc)
+		return [int](p11 and p12)
+	end,
+	0.8)]
+
+	[mhtest(
+	"memoized flip with random argument, unconditioned",
+	terra() : double
+		var proc = [mem(pfn(terra(x: int) return [bool](flip(0.8)) end))]
+		var items = Vector.fromItems(1, 2, 3)
+		var p1 = proc(uniformDraw(items))
+		var p2 = proc(uniformDraw(items))
+		m.destruct(items)
+		m.destruct(proc)
+		return [int](p1 and p2)
+	end,
+	0.6933333333333334)]
+
+	[mhtest(
+	"memoized random procedure, unconditioned",
+	terra() : double
+		var proc1 = [mem(pfn(terra(x: int) return [bool](flip(0.2)) end))]
+		var proc2 = [mem(pfn(terra(x: int) return [bool](flip(0.8)) end))]
+		var mp1: bool
+		var mp2: bool
+		if [bool](flip(0.7)) then
+			mp1 = proc1(1)
+			mp2 = proc1(2)
+		else
+			mp1 = proc2(1)
+			mp2 = proc2(2)
+		end
+		m.destruct(proc1)
+		m.destruct(proc2)
+		return [int](mp1 and mp2)
+	end,
+	0.22)]
+
+	[mhtest(
+	"mh query over rejection query for conditioned flip",
+	terra() : double
+		return [rejectionSample(terra()
+			var a = flip(0.7)
+			condition([bool]([call("bitflip", 0.8, a)]))
+			return (a)
+		end)]
+	end,
+	0.903225806451613)]
+
+	[mhtest(
+	"trans-dimensional",
+	terra() : double
+		var a = 0.7
+		if [bool](flip(0.9)) then
+			a = beta(1, 5)
+		end
+		var b = flip(a)
+		condition([bool](b))
+		return a
+	end,
+	0.417)]
+
+	-- -- TODO: LARJ version of transdimensional test
+	-- -----------------------------------------------
+	-- [mhtest(
+	-- "trans-dimensional",
+	-- terra() : double
+	-- 	var a = 0.7
+	-- 	if [bool](flip(0.9)) then
+	-- 		a = beta(1, 5)
+	-- 	end
+	-- 	var b = flip(a)
+	-- 	condition([bool](b))
+	-- 	return a
+	-- end,
+	-- 0.417)]
+
+	[mhtest(
+	"memoized flip in if branch (create/destroy memprocs), unconditioned",
+	terra() : double
+		var a = [mem(flip)]
+		if [bool](flip(0.5)) then
+			m.destruct(a)
+			a = [mem(flip)]
+		end
+		var b = a(0.5)
+		m.destruct(a)
+		return b
+	end,
+	0.5)]
+
+
+	-- Tests for things specific to new implementation
+
+	[mhtest(
+	"native loop",
+	terra() : double
+		var accum = 0
+		for i=0,4 do
+			accum = accum + flip(0.5, {structural=false})
+		end
+		return accum / 4.0
+	end,
+	0.5)]
+
+	[mhtest(
+	"directly conditioning variable value",
+	terra() : double
+		var accum = 0
+		for i=0,10 do
+			if i < 5 then
+				accum = accum + flip(0.5, {constrainTo=1})
+			else
+				accum = accum + flip(0.5)
+			end
+		end
+		return accum / 10.0
+	end,
+	0.75)]
+
+	var t2 = C.currentTimeInSeconds()
+
 	C.printf("tests done!\n")
+	C.printf("time: %g\n", t2 - t1)
+
 end
 
 -- local prof = terralib.require("/Users/dritchie/Git/terra/tests/lib/prof")

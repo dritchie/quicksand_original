@@ -249,8 +249,8 @@ local function makeERP(sample, logprobfn, propose)
 		if opstruct then
 			local ostype = opstruct:gettype()
 			for _,e in ipairs(ostype:getentries()) do
-				if e.field == "isStructural" then
-					return `opstruct.isStructural
+				if e.field == "structural" then
+					return `opstruct.structural
 				end
 			end
 		end
@@ -261,7 +261,7 @@ local function makeERP(sample, logprobfn, propose)
 		if opstruct then
 			local ostype = opstruct:gettype()
 			for _,e in ipairs(ostype:getentries()) do
-				if e.field == "conditionedValue" then
+				if e.field == "constrainTo" then
 					return true
 				end
 			end
@@ -293,19 +293,25 @@ local function makeERP(sample, logprobfn, propose)
 
 	-- Finally, wrap everything in a macro that extracts options from the
 	-- options struct.
-	return macro(function(...)
+	local ret = macro(function(...)
 		local params = {}
 		for i=1,numparams do table.insert(params, (select(i,...))) end
 		local optstruct = (select(numparams+1, ...))
 		local iscond = getIsConditioned(optstruct)
 		local isstruct = getIsStructural(optstruct)
-		local condVal = iscond and `optstruct.conditionedValue or nil
+		local condVal = iscond and (`optstruct.constrainTo) or nil
 		if condVal then
 			return `erpfn(isstruct, condVal, [params])
 		else
 			return `erpfn(isstruct, [params])
 		end
 	end)
+	-- These macros should look like functions to other code gen routines in the backend,
+	--    in the sense that they should expose a 'type'
+	ret.getdefinitions = function(self)
+		return sample:getdefinitions()
+	end
+	return ret
 end
 
 
@@ -352,7 +358,7 @@ end)
 erp.uniformDraw = macro(function(items, opstruct)
 	opstruct = opstruct or `{}
 	return quote
-		var probs = [Vector(double)].stackAlloc(items.length, 1.0/items.length)
+		var probs = [Vector(double)].stackAlloc(items.size, 1.0/items.size)
 	in
 		items:get(erp.multinomial(probs, opstruct))
 	end

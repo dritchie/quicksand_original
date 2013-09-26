@@ -423,7 +423,6 @@ end)
 
 -- Caller assumes ownership of the returned trace
 local newTrace = macro(function(computation)
-	-- Assume computation is a function pointer
 	local comptype = computation:gettype().type
 	local TraceType = RandExecTrace(comptype)
 	return `TraceType.heapAlloc(computation)
