@@ -302,11 +302,15 @@ local globalTrace = global(&GlobalTrace, nil)
 
 -- This is the normal, single trace that most inference uses.
 --    It has to specialize on the type of function that it's tracking.
-local RandExecTrace = templatize(function(ComputationType)
+local RandExecTrace = templatize(function(computation)
+
+	-- Get the type of this computation
+	local success, CompType = computation:getdefinitions()[1]:peektype()
+	if not success then CompType = computation:gettype() end
 
 	-- For the time being at least, we restrict inference to
 	-- computations with a single return value
-	if #ComputationType.returns ~= 1 then
+	if #CompType.returns ~= 1 then
 		error("Can only do inference on computations with a single return value.")
 	end
 
@@ -314,14 +318,12 @@ local RandExecTrace = templatize(function(ComputationType)
 
 	local struct Trace
 	{
-		computation: &ComputationType,
-		returnValue: ComputationType.returns[1]
+		returnValue: CompType.returns[1]
 	}
 	inheritance.dynamicExtend(GlobalTrace, Trace)
 
-	terra Trace:__construct(comp: &ComputationType)
+	terra Trace:__construct()
 		GlobalTrace.__construct(self)
-		self.computation = comp
 		-- Initialize the trace with rejection sampling
 		while not self.conditionsSatisfied do
 			-- Clear out the existing vars
@@ -338,7 +340,6 @@ local RandExecTrace = templatize(function(ComputationType)
 
 	terra Trace:__copy(trace: &Trace)
 		GlobalTrace.__copy(self, trace)
-		self.computation = trace.computation
 		self.returnValue = m.copy(trace.returnValue)
 	end
 
@@ -379,7 +380,7 @@ local RandExecTrace = templatize(function(ComputationType)
 		end])
 
 		-- Run computation
-		self.returnValue = self.computation()
+		self.returnValue = computation()
 
 		-- Clean up
 		self.loopcounters:clear()
@@ -422,11 +423,10 @@ end)
 ---- Functions exposed to external modules
 
 -- Caller assumes ownership of the returned trace
-local newTrace = macro(function(computation)
-	local comptype = computation:gettype().type
-	local TraceType = RandExecTrace(comptype)
-	return `TraceType.heapAlloc(computation)
-end)
+local function newTrace(computation)
+	local TraceType = RandExecTrace(computation)
+	return `TraceType.heapAlloc()
+end
 
 local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, params)
 	return quote

@@ -183,8 +183,7 @@ local function mcmc(computation, kernelgen, params)
 	local terra chain()
 		var kernel = kernelgen()
 		var samps = [Vector(Sample(RetValType))].stackAlloc()
-		var comp = computation
-		var currTrace : &BaseTrace = trace.newTrace(comp)
+		var currTrace : &BaseTrace = [trace.newTrace(computation)]
 		for i=0,iters do
 			if verbose then
 				C.printf(" iteration: %d\r", i+1)
@@ -192,7 +191,7 @@ local function mcmc(computation, kernelgen, params)
 			end
 			currTrace = kernel:next(currTrace)
 			if i % lag == 0 and i > burnin then
-				var derivedTrace = [&RandExecTrace(CompType)](currTrace)
+				var derivedTrace = [&RandExecTrace(computation)](currTrace)
 				samps:push([Sample(RetValType)].stackAlloc(derivedTrace.returnValue, derivedTrace.logprob))
 			end
 		end
@@ -250,8 +249,7 @@ end)
 -- Draw a sample from a computation via rejection
 local function rejectionSample(computation)
 	return quote
-		var comp = computation
-		var tr = trace.newTrace(comp)
+		var tr = [trace.newTrace(computation)]
 		var retval = tr.returnValue
 		m.delete(tr)
 	in
