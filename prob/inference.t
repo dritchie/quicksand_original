@@ -1,4 +1,5 @@
 local trace = terralib.require("prob.trace")
+local specialize = terralib.require("prob.specialize")
 local BaseTrace = trace.BaseTrace
 local RandExecTrace = trace.RandExecTrace
 local TraceWithRetVal = trace.TraceWithRetVal
@@ -78,14 +79,18 @@ terra RandomWalkKernel:next(currTrace: &BaseTrace)
 	-- If there are no free variables, then simply run the computation
 	-- unmodified (nested query can make this happen)
 	if numvars == 0 then
-		currTrace:traceUpdate()
+		[trace.traceUpdate(currTrace, {structureChange=false})]
 	-- Otherwise, do an MH proposal
 	else
 		nextTrace = currTrace:deepcopy()
 		var freevars = nextTrace:freeVars(self.structs, self.nonstructs)
 		var v = freevars:get(rand.uniformRandomInt(0, freevars.size))
 		var fwdPropLP, rvsPropLP = v:proposeNewValue()
-		nextTrace:traceUpdate()
+		if v.isStructural then
+			[trace.traceUpdate(nextTrace)]
+		else
+			[trace.traceUpdate(nextTrace, {structureChange=false})]
+		end
 		if nextTrace.newlogprob ~= 0.0 or nextTrace.oldlogprob ~= 0.0 then
 			var oldNumVars = numvars
 			var newNumVars = nextTrace:numFreeVars(self.structs, self.nonstructs)
@@ -178,7 +183,8 @@ local function mcmc(computation, kernelgen, params)
 	local iters = params.numsamps * lag
 	local verbose = params.verbose or false
 	local burnin = params.burnin or 0
-	local CompType = computation:getdefinitions()[1]:gettype()
+	local comp = specialize.default(computation)
+	local CompType = comp:getdefinitions()[1]:gettype()
 	local RetValType = CompType.returns[1]
 	local terra chain()
 		var kernel = kernelgen()

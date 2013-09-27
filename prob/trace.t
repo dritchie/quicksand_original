@@ -9,6 +9,7 @@ local templatize = terralib.require("templatize")
 local inheritance = terralib.require("inheritance")
 local m = terralib.require("mem")
 local rand = terralib.require("prob.random")
+local specialize = terralib.require("prob.specialize")
 
 local C = terralib.includecstring [[
 #include <stdio.h>
@@ -51,11 +52,16 @@ local nextid = 0
 local function pfn(fn)
 	local data = { definition = fn }
 	local ret = macro(function(...)
+		local args = {}
+		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
+		-- If we're compiling a specialization with no structure change, then
+		-- don't do any address tracking
+		if not specialize.globalParam("structureChange") then
+			return `fn([args])
+		end
 		-- Every call gets a unique id
 		local myid = nextid
 		nextid = nextid + 1
-		local args = {}
-		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
 		local argintermediates = {}
 		for _,a in ipairs(args) do table.insert(argintermediates, symbol(a:gettype())) end
 		-- Does the function have an explicitly annotated return type?
@@ -122,6 +128,8 @@ local struct BaseTrace
 	oldlogprob: double,
 	conditionsSatisfied: bool,
 }
+local TraceUpdateFnPtr = {&BaseTrace}->{}
+BaseTrace.entries:insert({field="traceUpdateVtable", type=&Vector(TraceUpdateFnPtr)})
 
 terra BaseTrace:__construct()
 	self.logprob = 0.0
@@ -141,11 +149,6 @@ terra BaseTrace:deepcopy() : &BaseTrace
 	notImplemented("deepcopy", "BaseTrace")
 end
 inheritance.virtual(BaseTrace, "deepcopy")
-
-terra BaseTrace:traceUpdate() : {}
-	notImplemented("traceUpdate", "BaseTrace")
-end
-inheritance.virtual(BaseTrace, "traceUpdate")
 
 terra BaseTrace:varListPointer() : &Vector(&RandVar)
 	notImplemented("varListPointer", "BaseTrace")
@@ -198,11 +201,10 @@ local struct GlobalTrace
 	vars: HashMap(IdSeq, Vector(&RandVar)),
 	varlist: Vector(&RandVar),
 	loopcounters: HashMap(IdSeq, int),
-	lastVarList: &Vector(&RandVar)		
+	lastVarList: &Vector(&RandVar),
+	currVarIndex: uint
 }
 inheritance.dynamicExtend(BaseTrace, GlobalTrace)
-
--- TODO: The flat var list optimization idea from previous implementations
 
 terra GlobalTrace:__construct()
 	BaseTrace.__construct(self)
@@ -243,8 +245,9 @@ terra GlobalTrace:__destruct()
 	m.destruct(self.loopcounters)
 end
 
-terra GlobalTrace:lookupVariable(isstruct: bool)
-	-- printCallStack()
+-- Algorithm for looking up the current variable when structure change is
+-- possible. Uses the global callsiteStack
+terra GlobalTrace:lookupVariableStructural(isstruct: bool)
 	-- How many times have we hit this lexical position (lexpos) before?
 	-- (Zero if never)
 	var lnump, foundlnum = self.loopcounters:getOrCreatePointer(callsiteStack)
@@ -268,6 +271,14 @@ terra GlobalTrace:lookupVariable(isstruct: bool)
 	else
 		return nil
 	end
+end
+
+-- Algorithm for looking up the current variable when structure change
+-- is not possible. Simply looks up variables in order of creation
+terra GlobalTrace:lookupVariableNonStructural()
+	var v = self.varlist:get(self.currVarIndex)
+	self.currVarIndex = self.currVarIndex + 1
+	return v
 end
 
 terra GlobalTrace:varListPointer() : &Vector(&RandVar)
@@ -299,14 +310,43 @@ local globalTrace = global(&GlobalTrace, nil)
 
 
 
+-- Specializing traceUpdate
+local paramTables = {}
+local function traceUpdate(trace, paramTable)
+	paramTable = paramTable or {}
+	local id = specialize.paramTableID(paramTable)
+	local vtableindex = id-1
+	paramTables[id] = paramTable
+	return quote
+		-- C.printf("id: %u\n", id)
+		-- C.printf("vtable size: %u\n", trace.traceUpdateVtable.size)
+		var fnptr : TraceUpdateFnPtr = trace.traceUpdateVtable:get(vtableindex)
+	in
+		fnptr(trace)
+	end
+end
+local vmethods = {} -- Hold on to these to prevent GC
+local function fillTraceUpdateVtable(trace)
+	local Trace = terralib.typeof(trace).type
+	for _,pt in ipairs(paramTables) do
+		local specfn = Trace.traceUpdate(unpack(specialize.paramTableToList(pt)))
+		table.insert(vmethods, specfn)
+		Vector(TraceUpdateFnPtr).methods.push(Trace.traceUpdateVtable:getpointer(), specfn:getpointer())
+	end
+	Trace.traceUpdateVtableIsFilled:set(true)
+end
+
+
 
 -- This is the normal, single trace that most inference uses.
 --    It has to specialize on the type of function that it's tracking.
 local RandExecTrace = templatize(function(computation)
 
-	-- Get the type of this computation
-	local success, CompType = computation:getdefinitions()[1]:peektype()
-	if not success then CompType = computation:gettype() end
+	-- Get the type of this computation (requires us to generate the default,
+	--  unspecialized version)
+	local comp = specialize.default(computation)
+	local success, CompType = comp:peektype()
+	if not success then CompType = comp:gettype() end
 
 	-- For the time being at least, we restrict inference to
 	-- computations with a single return value
@@ -314,16 +354,24 @@ local RandExecTrace = templatize(function(computation)
 		error("Can only do inference on computations with a single return value.")
 	end
 
-	-- TODO: The flat var list optimization idea from previous implementations
-
 	local struct Trace
 	{
 		returnValue: CompType.returns[1]
 	}
 	inheritance.dynamicExtend(GlobalTrace, Trace)
 
+	Trace.traceUpdateVtable = global(Vector(TraceUpdateFnPtr))
+	Vector(TraceUpdateFnPtr).methods.__construct(Trace.traceUpdateVtable:getpointer())
+	Trace.traceUpdateVtableIsFilled = global(bool, false)
+
 	terra Trace:__construct()
 		GlobalTrace.__construct(self)
+		-- JIT the traceUpdate functions, if we haven't compiled them yet.
+		if not [Trace.traceUpdateVtableIsFilled] then
+			fillTraceUpdateVtable(self)	-- Call back into Lua
+		end
+		-- Allow this instance to refer to the correct set of traceUpdate functions.
+		self.traceUpdateVtable = &[Trace.traceUpdateVtable]
 		-- Initialize the trace with rejection sampling
 		while not self.conditionsSatisfied do
 			-- Clear out the existing vars
@@ -334,12 +382,13 @@ local RandExecTrace = templatize(function(computation)
 			end])
 			self.vars:clear()
 			-- Run the program forward
-			self:traceUpdate()
+			[traceUpdate(self)]
 		end
 	end
 
 	terra Trace:__copy(trace: &Trace)
 		GlobalTrace.__copy(self, trace)
+		self.traceUpdateVtable = trace.traceUpdateVtable
 		self.returnValue = m.copy(trace.returnValue)
 	end
 
@@ -355,67 +404,83 @@ local RandExecTrace = templatize(function(computation)
 		m.destruct(self.returnValue)
 	end
 
-	terra Trace:traceUpdate() : {}
-		-- C.printf("======================\n")
-		-- Assume ownership of the global trace
-		var prevtrace = globalTrace
-		globalTrace = self
+	-- Generate specialized 'traceUpdate' code
+	Trace.traceUpdate = templatize(function(...)
+		local structureChange = specialize.paramFromList("structureChange",...)
+		local args = {}
+		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
+		return terra(self: &Trace) : {}
+			-- Assume ownership of the global trace
+			var prevtrace = globalTrace
+			globalTrace = self
 
-		self.logprob = 0.0
-		self.newlogprob = 0.0
-		self.loopcounters:clear()
-		self.conditionsSatisfied = true
+			self.logprob = 0.0
+			self.newlogprob = 0.0
+			self.oldlogprob = 0.0
+			self.loopcounters:clear()
+			self.conditionsSatisfied = true
+			self.currVarIndex = 0
 
-		-- Clear out the flat var list so we can properly refill it
-		self.varlist:clear()
+			-- C.printf("%u\n", self.varlist.size)
 
-		-- Mark all variables as inactive; only those reached by the computation
-		-- will become active
-		var it = self.vars:iterator()
-		util.foreach(it, [quote
-			var vlistp = it:valPointer()
-			for i=0,vlistp.size do
-				vlistp:get(i).isActive = false
+			-- Clear out the flat var list so we can properly refill it
+			[structureChange and (`self.varlist:clear()) or (quote end)]
+
+			-- Mark all variables as inactive; only those reached by the computation
+			-- will become active
+			[structureChange and 
+			quote
+				var it = self.vars:iterator()
+				util.foreach(it, [quote
+					var vlistp = it:valPointer()
+					for i=0,vlistp.size do
+						vlistp:get(i).isActive = false
+					end
+				end])
 			end
-		end])
+				or
+			quote end]
 
-		-- Run computation
-		self.returnValue = computation()
+			-- Run computation
+			self.returnValue = [specialize.specialize(computation, unpack(args))]()
 
-		-- Clean up
-		self.loopcounters:clear()
-		self.lastVarList = nil
+			-- Clean up
+			self.loopcounters:clear()
+			self.lastVarList = nil
 
-		-- Clear out any random variables that are no longer reachable
-		self.oldlogprob = 0.0
-		it = self.vars:iterator()
-		util.foreach(it, [quote
-			var vlistp = it:valPointer()
-			-- For common use cases (e.g. variables created in loops),
-			-- iterating from last var to first will make removal more
-			-- efficient (it'll just be a pop() in most cases)
-			for i=[int](vlistp.size-1),-1,-1 do
-				var vp = vlistp:get(i)
-				if not vp.isActive then
-					self.oldlogprob = self.oldlogprob + vp.logprob
-					vlistp:remove(i)
-					m.delete(vp)
-					i = i + 1
-				end
+			-- Clear out any random variables that are no longer reachable
+			[structureChange and
+			quote
+				var it = self.vars:iterator()
+				util.foreach(it, [quote
+					var vlistp = it:valPointer()
+					-- For common use cases (e.g. variables created in loops),
+					-- iterating from last var to first will make removal more
+					-- efficient (it'll just be a pop() in most cases)
+					for i=[int](vlistp.size-1),-1,-1 do
+						var vp = vlistp:get(i)
+						if not vp.isActive then
+							self.oldlogprob = self.oldlogprob + vp.logprob
+							vlistp:remove(i)
+							m.delete(vp)
+							i = i + 1
+						end
+					end
+				end])
 			end
-		end])
+				or
+			quote end]
 
-		-- Reset the global trace data
-		globalTrace = prevtrace
-	end
-	inheritance.virtual(Trace, "traceUpdate")
+			-- Reset the global trace data
+			globalTrace = prevtrace
+		end
+	end)
 
 
 	m.addConstructors(Trace)
 	return Trace
 
 end)
-
 
 
 
@@ -428,7 +493,7 @@ local function newTrace(computation)
 	return `TraceType.heapAlloc()
 end
 
-local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, params)
+local function lookupVariableValueStructural(RandVarType, isstruct, iscond, condVal, params)
 	return quote
 		var retval: RandVarType.ValType
 		-- If there's no global trace, just return the value
@@ -436,7 +501,7 @@ local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, param
 			retval = [iscond and condVal or (`RandVarType.sample([params]))]
 		else
 			-- Otherwise, proceed with trace interactions.
-			var rv = [&RandVarType](globalTrace:lookupVariable(isstruct))
+			var rv = [&RandVarType](globalTrace:lookupVariableStructural(isstruct))
 			if rv ~= nil then
 				-- Check for changes that necessitate a logprob update
 				[iscond and (`rv:checkForUpdates(condVal, [params])) or (`rv:checkForUpdates([params]))]
@@ -458,7 +523,35 @@ local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, param
 	end
 end
 
+local function lookupVariableValueNonStructural(RandVarType, isstruct, iscond, condVal, params)
+	return quote
+		var retval: RandVarType.ValType
+		var rv = [&RandVarType](globalTrace:lookupVariableNonStructural())
+		-- Check for changes that necessitate a logprob update
+		[iscond and (`rv:checkForUpdates(condVal, [params])) or (`rv:checkForUpdates([params]))]
+		-- Add to logprob, set active
+		rv.isActive = true
+		globalTrace.logprob = globalTrace.logprob + rv.logprob
+		retval = m.copy(rv.value)
+	in
+		retval
+	end
+end
+
+local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, params)
+	if specialize.globalParam("structureChange") then
+		return lookupVariableValueStructural(RandVarType, isstruct, iscond, condVal, params)
+	else
+		return lookupVariableValueNonStructural(RandVarType, isstruct, iscond, condVal, params)
+	end
+end
+
 local factor = macro(function(num)
+	-- Do not generate any code if we're compiling a specialization
+	-- without factor evaluation.
+	if not specialize.globalParam("factorEval") then
+		return quote end
+	end
 	return quote
 		if globalTrace ~= nil then
 			globalTrace:factor(num)
@@ -478,6 +571,7 @@ end)
 return
 {
 	pfn = pfn,
+	traceUpdate = traceUpdate,
 	newTrace = newTrace,
 	BaseTrace = BaseTrace,
 	RandExecTrace = RandExecTrace,
