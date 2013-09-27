@@ -421,8 +421,6 @@ local RandExecTrace = templatize(function(computation)
 			self.conditionsSatisfied = true
 			self.currVarIndex = 0
 
-			-- C.printf("%u\n", self.varlist.size)
-
 			-- Clear out the flat var list so we can properly refill it
 			[structureChange and (`self.varlist:clear()) or (quote end)]
 
@@ -442,7 +440,7 @@ local RandExecTrace = templatize(function(computation)
 			quote end]
 
 			-- Run computation
-			self.returnValue = [specialize.specialize(computation, unpack(args))]()
+			self.returnValue = [specialize.specializeWithParams(computation, unpack(args))]()
 
 			-- Clean up
 			self.loopcounters:clear()

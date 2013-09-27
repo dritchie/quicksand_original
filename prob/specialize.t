@@ -53,7 +53,7 @@ local function globalParam(name)
 	return paramFromTable(name, values)
 end
 
-local specialize = templatize(function(computation, ...)
+local specializeWithParams = templatize(function(computation, ...)
 	local ptbl = paramListToTable(...)
 	for name,value in pairs(ptbl) do
 		values[name] = value
@@ -63,8 +63,12 @@ local specialize = templatize(function(computation, ...)
 	return comp
 end)
 
+local function specializeWithGlobals(computation)
+	return specializeWithParams(computation, unpack(paramTableToList(values)))
+end
+
 local function default(computation)
-	return specialize(computation, unpack(paramTableToList({})))
+	return specializeWithParams(computation, unpack(paramTableToList({})))
 end
 
 -- Associating unique IDs with param tables
@@ -105,7 +109,8 @@ return
 	paramListToTable = paramListToTable,
 	globalParam = globalParam,
 	paramTableID = paramTableID,
-	specialize = specialize,
+	specializeWithParams = specializeWithParams,
+	specializeWithGlobals = specializeWithGlobals,
 	default = default
 }
 

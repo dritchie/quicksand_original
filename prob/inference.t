@@ -79,7 +79,7 @@ terra RandomWalkKernel:next(currTrace: &BaseTrace)
 	-- If there are no free variables, then simply run the computation
 	-- unmodified (nested query can make this happen)
 	if numvars == 0 then
-		[trace.traceUpdate(currTrace, {structureChange=false})]
+		[trace.traceUpdate(currTrace)]
 	-- Otherwise, do an MH proposal
 	else
 		nextTrace = currTrace:deepcopy()

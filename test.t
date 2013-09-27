@@ -88,40 +88,12 @@ local function eqtest(name, estimatedValues, trueValues)
 	end
 end
 
--- Convenience hack to define functions 'inside' other functions
-local fns = {}
-local function def(fnname, fn)
-	fns[fnname] = fn
-	return quote end
+-- Are we doing the nonstructural optimization trick?
+-- Turn this on/off to see performance change
+local doingNonstructOpt = true
+local function maybenot()
+	return not doingNonstructOpt
 end
-local function call(fnname, ...)
-	local fn = fns[fnname]
-	if select("#",...) == 0 then
-		return `fn()
-	else
-		local args = {}
-		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
-		return `fn([args])
-	end
-end
-
--- Recursive function definitions
-local powerLaw_tailrec = pfn()
-powerLaw_tailrec:define(terra(prob: double, x: int) : int
-	if [bool](flip(prob)) then
-		return x
-	else
-		return powerLaw_tailrec(prob, x+1)
-	end
-end)
-local powerLaw = pfn()
-powerLaw:define(terra(prob: double, x: int) : int
-	if [bool](flip(prob)) then
-		return x
-	else
-		return 0 + powerLaw(prob, x+1)
-	end
-end)
 
 
 local terra doTests()
@@ -135,454 +107,536 @@ local terra doTests()
 	[fwdtest(
 	"flip sample",
 	terra() : double
-		return flip(0.7)
+		return [flip(0.7)]
 	end,
 	0.7)]
 
 	[mhtest(
 	"flip query",
-	function() return terra() : double
-		return flip(0.7, {structural=false})
-	end end,
+	function()
+		return terra() : double
+			return [flip(0.7, {structural=maybenot()})]
+		end
+	end,
 	0.7)]
 
-	-- [fwdtest(
-	-- "uniform sample",
-	-- terra() : double
-	-- 	return uniform(0.1, 0.4)
-	-- end,
-	-- 0.5*(.1+.4))]
+	[fwdtest(
+	"uniform sample",
+	terra() : double
+		return [uniform(0.1, 0.4, {structural=maybenot()})]
+	end,
+	0.5*(.1+.4))]
 
-	-- [mhtest(
-	-- "uniform query",
-	-- terra() : double
-	-- 	return uniform(0.1, 0.4)
-	-- end,
-	-- 0.5*(.1+.4))]
+	[mhtest(
+	"uniform query",
+	function()
+		return terra() : double
+			return [uniform(0.1, 0.4, {structural=maybenot()})]
+		end
+	end,	
+	0.5*(.1+.4))]
 
-	-- [fwdtest(
-	-- "multinomial sample",
-	-- terra() : double
-	-- 	var items = Vector.fromItems(.2, .3, .4)
-	-- 	var probs = Vector.fromItems(.2, .6, .2)
-	-- 	var ret = multinomialDraw(items, probs)
-	-- 	m.destruct(items)
-	-- 	m.destruct(probs)
-	-- 	return ret
-	-- end,
-	-- 0.2*.2 + 0.6*.3 + 0.2*.4)]
+	[fwdtest(
+	"multinomial sample",
+	terra() : double
+		var items = Vector.fromItems(.2, .3, .4)
+		var probs = Vector.fromItems(.2, .6, .2)
+		var ret = [multinomialDraw(items, probs, {structural=maybenot()})]
+		m.destruct(items)
+		m.destruct(probs)
+		return ret
+	end,
+	0.2*.2 + 0.6*.3 + 0.2*.4)]
 
-	-- [mhtest(
-	-- "multinomial query",
-	-- terra() : double
-	-- 	var items = Vector.fromItems(.2, .3, .4)
-	-- 	var probs = Vector.fromItems(.2, .6, .2)
-	-- 	var ret = multinomialDraw(items, probs)
-	-- 	m.destruct(items)
-	-- 	m.destruct(probs)
-	-- 	return ret
-	-- end,
-	-- 0.2*.2 + 0.6*.3 + 0.2*.4)]
+	[mhtest(
+	"multinomial query",
+	function()
+		return terra() : double
+			var items = Vector.fromItems(.2, .3, .4)
+			var probs = Vector.fromItems(.2, .6, .2)
+			var ret = [multinomialDraw(items, probs, {structural=maybenot()})]
+			m.destruct(items)
+			m.destruct(probs)
+			return ret
+		end
+	end,
+	0.2*.2 + 0.6*.3 + 0.2*.4)]
 
-	-- [eqtest(
-	-- "multinomial lp",
-	-- {
-	-- 	rand.multinomial_logprob(double)(0, Vector.fromNums(.2, .6, .2)),
-	-- 	rand.multinomial_logprob(double)(1, Vector.fromNums(.2, .6, .2)),
-	-- 	rand.multinomial_logprob(double)(2, Vector.fromNums(.2, .6, .2))
-	-- },
-	-- {math.log(.2), math.log(.6), math.log(.2)})]
+	[eqtest(
+	"multinomial lp",
+	{
+		rand.multinomial_logprob(double)(0, Vector.fromNums(.2, .6, .2)),
+		rand.multinomial_logprob(double)(1, Vector.fromNums(.2, .6, .2)),
+		rand.multinomial_logprob(double)(2, Vector.fromNums(.2, .6, .2))
+	},
+	{math.log(.2), math.log(.6), math.log(.2)})]
 
-	-- [fwdtest(
-	-- "gaussian sample",
-	-- terra() : double
-	-- 	return gaussian(0.1, 0.5)
-	-- end,
-	-- 0.1)]
+	[fwdtest(
+	"gaussian sample",
+	terra() : double
+		return [gaussian(0.1, 0.5, {structural=maybenot()})]
+	end,
+	0.1)]
 
-	-- [mhtest(
-	-- "gaussian query",
-	-- terra() : double
-	-- 	return gaussian(0.1, 0.5)
-	-- end,
-	-- 0.1)]
+	[mhtest(
+	"gaussian query",
+	function()
+		return terra() : double
+			return [gaussian(0.1, 0.5, {structural=maybenot()})]
+		end		
+	end,
+	0.1)]
 
-	-- [eqtest(
-	-- "gaussian lp",
-	-- {
-	-- 	rand.gaussian_logprob(double)(0.0, 0.1, 0.5),
-	-- 	rand.gaussian_logprob(double)(0.25, 0.1, 0.5),
-	-- 	rand.gaussian_logprob(double)(0.6, 0.1, 0.5),
-	-- },
-	-- {-0.2457913526447274, -0.27079135264472737, -0.7257913526447274})]
+	[eqtest(
+	"gaussian lp",
+	{
+		rand.gaussian_logprob(double)(0.0, 0.1, 0.5),
+		rand.gaussian_logprob(double)(0.25, 0.1, 0.5),
+		rand.gaussian_logprob(double)(0.6, 0.1, 0.5),
+	},
+	{-0.2457913526447274, -0.27079135264472737, -0.7257913526447274})]
 
-	-- [fwdtest(
-	-- "gamma sample",
-	-- terra() : double
-	-- 	return gamma(2.0, 2.0)/10.0
-	-- end,
-	-- 0.4)]
+	[fwdtest(
+	"gamma sample",
+	terra() : double
+		return [gamma(2.0, 2.0, {structural=maybenot()})]/10.0
+	end,
+	0.4)]
 
-	-- [mhtest(
-	-- "gamma query",
-	-- terra() : double
-	-- 	return gamma(2.0, 2.0)/10.0
-	-- end,
-	-- 0.4)]
+	[mhtest(
+	"gamma query",
+	function()
+		return terra() : double
+			return [gamma(2.0, 2.0, {structural=maybenot()})]/10.0
+		end
+	end,
+	0.4)]
 
-	-- [eqtest(
-	-- "gamma lp",
-	-- {
-	-- 	rand.gamma_logprob(double)(1.0, 2.0, 2.0),
-	-- 	rand.gamma_logprob(double)(4.0, 2.0, 2.0),
-	-- 	rand.gamma_logprob(double)(8.0, 2.0, 2.0)
-	-- },
-	-- {-1.8862944092546166, -2.000000048134726, -3.306852867574781})]
+	[eqtest(
+	"gamma lp",
+	{
+		rand.gamma_logprob(double)(1.0, 2.0, 2.0),
+		rand.gamma_logprob(double)(4.0, 2.0, 2.0),
+		rand.gamma_logprob(double)(8.0, 2.0, 2.0)
+	},
+	{-1.8862944092546166, -2.000000048134726, -3.306852867574781})]
 
-	-- [fwdtest(
-	-- "beta sample",
-	-- terra() : double
-	-- 	return beta(2.0, 5.0)
-	-- end,
-	-- 2.0/(2+5))]
+	[fwdtest(
+	"beta sample",
+	terra() : double
+		return [beta(2.0, 5.0, {structural=maybenot()})]
+	end,
+	2.0/(2+5))]
 
-	-- [mhtest(
-	-- "beta query",
-	-- terra() : double
-	-- 	return beta(2.0, 5.0)
-	-- end,
-	-- 2.0/(2+5))]
+	[mhtest(
+	"beta query",
+	function()
+		return terra() : double
+			return [beta(2.0, 5.0, {structural=maybenot()})]
+		end
+	end,
+	2.0/(2+5))]
 
-	-- [eqtest(
-	-- "beta lp",
-	-- {
-	-- 	rand.beta_logprob(double)(0.1, 2.0, 5.0),
-	-- 	rand.beta_logprob(double)(0.2, 2.0, 5.0),
-	-- 	rand.beta_logprob(double)(0.6, 2.0, 5.0)
-	-- },
-	-- {0.677170196389683, 0.899185234324094, -0.7747911992475776})]
+	[eqtest(
+	"beta lp",
+	{
+		rand.beta_logprob(double)(0.1, 2.0, 5.0),
+		rand.beta_logprob(double)(0.2, 2.0, 5.0),
+		rand.beta_logprob(double)(0.6, 2.0, 5.0)
+	},
+	{0.677170196389683, 0.899185234324094, -0.7747911992475776})]
 
-	-- [fwdtest(
-	-- "binomial sample",
-	-- terra() : double
-	-- 	return binomial(0.5, 40.0)/40.0
-	-- end,
-	-- 0.5)]
+	[fwdtest(
+	"binomial sample",
+	terra() : double
+		return [binomial(0.5, 40.0, {structural=maybenot()})]/40.0
+	end,
+	0.5)]
 
-	-- [mhtest(
-	-- "binomial query",
-	-- terra() : double
-	-- 	return binomial(0.5, 40.0)/40.0
-	-- end,
-	-- 0.5)]
+	[mhtest(
+	"binomial query",
+	function()
+		return terra() : double
+			return [binomial(0.5, 40.0, {structural=maybenot()})]/40.0
+		end
+	end,
+	0.5)]
 
-	-- [eqtest(
-	-- "binomial lp",
-	-- {
-	-- 	rand.binomial_logprob(double)(15, .5, 40),
-	-- 	rand.binomial_logprob(double)(20, .5, 40),
-	-- 	rand.binomial_logprob(double)(30, .5, 40)
-	-- },
-	-- {-3.3234338674089985, -2.0722579911387817, -7.2840211276953575})]
+	[eqtest(
+	"binomial lp",
+	{
+		rand.binomial_logprob(double)(15, .5, 40),
+		rand.binomial_logprob(double)(20, .5, 40),
+		rand.binomial_logprob(double)(30, .5, 40)
+	},
+	{-3.3234338674089985, -2.0722579911387817, -7.2840211276953575})]
 
-	-- [fwdtest(
-	-- "poisson sample",
-	-- terra() : double
-	-- 	return poisson(4.0)/10.0
-	-- end,
-	-- 0.4)]
+	[fwdtest(
+	"poisson sample",
+	terra() : double
+		return [poisson(4.0, {structural=maybenot()})]/10.0
+	end,
+	0.4)]
 
-	-- [mhtest(
-	-- "poisson query",
-	-- terra() : double
-	-- 	return poisson(4.0)/10.0
-	-- end,
-	-- 0.4)]
+	[mhtest(
+	"poisson query",
+	function()
+		return terra() : double
+			return [poisson(4.0, {structural=maybenot()})]/10.0
+		end
+	end,
+	0.4)]
 
-	-- [eqtest(
-	-- "poisson lp",
-	-- {
-	-- 	rand.poisson_logprob(double)(2, 4),
-	-- 	rand.poisson_logprob(double)(5, 4),
-	-- 	rand.poisson_logprob(double)(7, 4)
-	-- },
-	-- {-1.9205584583201643, -1.8560199371825927, -2.821100833226181})]
+	[eqtest(
+	"poisson lp",
+	{
+		rand.poisson_logprob(double)(2, 4),
+		rand.poisson_logprob(double)(5, 4),
+		rand.poisson_logprob(double)(7, 4)
+	},
+	{-1.9205584583201643, -1.8560199371825927, -2.821100833226181})]
 
 
-	-- -- Tests adapted from Church
+	-- Tests adapted from Church
 
-	-- [mhtest(
-	-- "setting a flip",
-	-- terra() : double
-	-- 	var a = 1.0/1000
-	-- 	condition([bool](flip(a)))
-	-- 	return a
-	-- end,
-	-- 1.0/1000)]
+	[mhtest(
+	"setting a flip",
+	function()
+		return terra() : double
+			var a = 1.0/1000
+			condition([bool]([flip(a, {structural=maybenot()})]))
+			return a
+		end
+	end,
+	1.0/1000)]
 
-	-- [mhtest(
-	-- "and conditioned on or",
-	-- terra() : double
-	-- 	var a = [bool](flip(0.5))
-	-- 	var b = [bool](flip(0.5))
-	-- 	condition(a or b)
-	-- 	return [int](a and b)
-	-- end,
-	-- 1.0/3)]
+	[mhtest(
+	"and conditioned on or",
+	function()
+		return terra() : double
+			var a = [bool]([flip(0.5, {structural=maybenot()})])
+			var b = [bool]([flip(0.5, {structural=maybenot()})])
+			condition(a or b)
+			return [int](a and b)
+		end
+	end,
+	1.0/3)]
 
-	-- [mhtest(
-	-- "and conditioned on or, biased flip",
-	-- terra() : double
-	-- 	var a = [bool](flip(0.3))
-	-- 	var b = [bool](flip(0.3))
-	-- 	condition(a or b)
-	-- 	return [int](a and b)
-	-- end,
-	-- (0.3*0.3) / (0.3*0.3 + 0.7*0.3 + 0.3*0.7))]
+	[mhtest(
+	"and conditioned on or, biased flip",
+	function()
+		return terra() : double
+			var a = [bool]([flip(0.3, {structural=maybenot()})])
+			var b = [bool]([flip(0.3, {structural=maybenot()})])
+			condition(a or b)
+			return [int](a and b)
+		end
+	end,
+	(0.3*0.3) / (0.3*0.3 + 0.7*0.3 + 0.3*0.7))]
 
-	-- [mhtest(
-	-- "conditioned flip",
-	-- terra() : double
-	-- 	[def("bitflip", pfn(terra(fidelity: double, x: int)
-	-- 		if [bool](x) then
-	-- 			return flip(fidelity)
-	-- 		else
-	-- 			return flip(1.0-fidelity)
-	-- 		end
-	-- 	end))]
-	-- 	var hyp = flip(0.7)
-	-- 	condition([bool]([call("bitflip", 0.8, hyp)]))
-	-- 	return hyp
-	-- end,
-	-- (0.7*0.8) / (0.7*0.8 + 0.3*0.2))]
+	[mhtest(
+	"conditioned flip",
+	function()
+		local bitflip = pfn(terra(fidelity: double, x: int)
+			var p = fidelity
+			if not [bool](x) then p = 1.0 - fidelity end
+			return [flip(p, {structural=maybenot()})]
+		end)
+		return terra() : double
+			var hyp = [flip(0.7, {structural=maybenot()})]
+			condition([bool](bitflip(0.8, hyp)))
+			return hyp
+		end
+	end,
+	(0.7*0.8) / (0.7*0.8 + 0.3*0.2))]
 
-	-- [mhtest(
-	-- "random 'if' with random branches, unconditioned",
-	-- terra() : double
-	-- 	if [bool](flip(0.7)) then
-	-- 		return flip(0.2)
-	-- 	else
-	-- 		return flip(0.8)
-	-- 	end
-	-- end,
-	-- 0.7*0.2 + 0.3*0.8)]
+	[mhtest(
+	"random 'if' with random branches, unconditioned",
+	function()
+		return terra() : double
+			if [bool]([flip(0.7)]) then
+				return [flip(0.2, {structural=maybenot()})]
+			else
+				return [flip(0.8, {structural=maybenot()})]
+			end
+		end
+	end,
+	0.7*0.2 + 0.3*0.8)]
 
-	-- [mhtest(
-	-- "flip with random weight, unconditioned",
-	-- terra() : double
-	-- 	var weight: double
-	-- 	if [bool](flip(0.7)) then
-	-- 		weight = 0.2
-	-- 	else
-	-- 		weight = 0.8
-	-- 	end
-	-- 	return flip(weight)
-	-- end,
-	-- 0.7*0.2 + 0.3*0.8)]
+	[mhtest(
+	"flip with random weight, unconditioned",
+	function()
+		return terra() : double
+			var weight: double
+			if [bool]([flip(0.7, {structural=maybenot()})]) then
+				weight = 0.2
+			else
+				weight = 0.8
+			end
+			return [flip(weight, {structural=maybenot()})]
+		end
+	end,
+	0.7*0.2 + 0.3*0.8)]
 
-	-- [mhtest(
-	-- "random procedure application, unconditioned",
-	-- terra() : double
-	-- 	[def("rpa1", pfn(terra() return flip(0.2) end))]
-	-- 	[def("rpa2", pfn(terra() return flip(0.8) end))]
-	-- 	if [bool](flip(0.7)) then
-	-- 		return [call("rpa1")]
-	-- 	else
-	-- 		return [call("rpa2")]
-	-- 	end
-	-- end,
-	-- 0.7*0.2 + 0.3*0.8)]
+	[mhtest(
+	"random procedure application, unconditioned",
+	function()
+		local p1 = pfn(terra() return [flip(0.2, {structural=maybenot()})] end)
+		local p2 = pfn(terra() return [flip(0.8, {structural=maybenot()})] end)
+		return terra() : double
+			if [bool]([flip(0.7)]) then
+				return p1()
+			else
+				return p2()
+			end
+		end
+	end,
+	0.7*0.2 + 0.3*0.8)]
 
-	-- [mhtest(
-	-- "conditioned multinomial",
-	-- terra() : double
-	-- 	var probs = Vector.fromItems(.1, .6, .3)
-	-- 	var hyp = multinomial(probs)
-	-- 	[def("observe", pfn(terra(x: int)
-	-- 		if [bool](flip(0.8)) then
-	-- 			return x
-	-- 		else
-	-- 			return 0
-	-- 		end
-	-- 	end))]
-	-- 	condition([call("observe", hyp)] == 0)
-	-- 	m.destruct(probs)
-	-- 	return [int](hyp == 0)
-	-- end,
-	-- 0.357)]
+	[mhtest(
+	"conditioned multinomial",
+	function()
+		local observe = pfn(terra(x: int)
+			if [bool]([flip(0.8, {structural=maybenot()})]) then
+				return x
+			else
+				return 0
+			end
+		end)
+		return terra() : double
+			var probs = Vector.fromItems(.1, .6, .3)
+			var hyp = [multinomial(probs, {structural=maybenot()})]
+			condition(observe(hyp) == 0)
+			m.destruct(probs)
+			return [int](hyp == 0)
+		end
+	end,
+	0.357)]
 
-	-- [mhtest(
-	-- "recursive stochastic fn, unconditioned (tail recursive)",
-	-- terra() : double
-	-- 	var a = powerLaw_tailrec(0.3, 1)
-	-- 	return [int](a < 5)
-	-- end,
-	-- 0.7599)]
+	[mhtest(
+	"recursive stochastic fn, unconditioned (tail recursive)",
+	function()
+		local powerLaw = pfn()
+		powerLaw:define(terra(prob: double, x: int) : int
+			if [bool]([flip(prob)]) then
+				return x
+			else
+				return powerLaw(prob, x+1)
+			end
+		end)
+		return terra() : double
+			var a = powerLaw(0.3, 1)
+			return [int](a < 5)
+		end
+	end,
+	0.7599)]
 
-	-- [mhtest(
-	-- "recursive stochastic fn, unconditioned",
-	-- terra() : double
-	-- 	var a = powerLaw(0.3, 1)
-	-- 	return [int](a < 5)
-	-- end,
-	-- 0.7599)]
+	[mhtest(
+	"recursive stochastic fn, unconditioned",
+	function()
+		local powerLaw = pfn()
+		powerLaw:define(terra(prob: double, x: int) : int
+			if [bool]([flip(prob)]) then
+				return x
+			else
+				return 0 + powerLaw(prob, x+1)
+			end
+		end)
+		return terra() : double
+			var a = powerLaw(0.3, 1)
+			return [int](a < 5)
+		end
+	end,
+	0.7599)]
 
-	-- [mhtest(
-	-- "memoized flip, unconditioned",
-	-- terra() : double
-	-- 	var proc = [mem(pfn(terra(x: int) return [bool](flip(0.8)) end))]
-	-- 	var p11 = proc(1)	
-	-- 	var p21 = proc(2)
-	-- 	var p12 = proc(1)
-	-- 	var p22 = proc(2)
-	-- 	m.destruct(proc)
-	-- 	return [int](p11 and p21 and p22)
-	-- end,
-	-- 0.64)]
+	[mhtest(
+	"memoized flip, unconditioned",
+	function()
+		return terra() : double
+			var proc = [mem(pfn(terra(x: int) return [bool]([flip(0.8, {structural=maybenot()})]) end))]
+			var p11 = proc(1)	
+			var p21 = proc(2)
+			var p12 = proc(1)
+			var p22 = proc(2)
+			m.destruct(proc)
+			return [int](p11 and p21 and p22)
+		end
+	end,
+	0.64)]
 
-	-- [mhtest(
-	-- "memoized flip, conditioned",
-	-- terra() : double
-	-- 	var proc = [mem(pfn(terra(x: int) return [bool](flip(0.2)) end))]
-	-- 	var p1 = proc(1)	
-	-- 	var p21 = proc(2)
-	-- 	var p22 = proc(2)
-	-- 	var p23 = proc(2)
-	-- 	condition(p1 or p21 or p22 or p23)
-	-- 	var ret = [int](proc(1))
-	-- 	m.destruct(proc)
-	-- 	return ret
-	-- end,
-	-- 0.5555555555555555)]
+	[mhtest(
+	"memoized flip, conditioned",
+	function()
+		return terra() : double
+			var proc = [mem(pfn(terra(x: int) return [bool]([flip(0.2, {structural=maybenot()})]) end))]
+			var p1 = proc(1)	
+			var p21 = proc(2)
+			var p22 = proc(2)
+			var p23 = proc(2)
+			condition(p1 or p21 or p22 or p23)
+			var ret = [int](proc(1))
+			m.destruct(proc)
+			return ret
+		end
+	end,
+	0.5555555555555555)]
 
-	-- -- Not quite equivalent to the Church test, but that version is not
-	-- -- expressable in this language (lack of proper closures)
-	-- [mhtest(
-	-- "bound symbol used inside memoizer, unconditioned",
-	-- terra() : double
-	-- 	var a = flip(0.8)
-	-- 	var proc = [mem(pfn(terra(a: int) return [bool](a) end))]
-	-- 	var p11 = proc(a)
-	-- 	var p12 = proc(a)
-	-- 	m.destruct(proc)
-	-- 	return [int](p11 and p12)
-	-- end,
-	-- 0.8)]
+	-- Not quite equivalent to the Church test, but that version is not
+	-- expressable in this language (lack of proper closures)
+	[mhtest(
+	"bound symbol used inside memoizer, unconditioned",
+	function()
+		return terra() : double
+			var a = [flip(0.8, {structural=maybenot()})]
+			var proc = [mem(pfn(terra(a: int) return [bool](a) end))]
+			var p11 = proc(a)
+			var p12 = proc(a)
+			m.destruct(proc)
+			return [int](p11 and p12)
+		end
+	end,
+	0.8)]
 
-	-- [mhtest(
-	-- "memoized flip with random argument, unconditioned",
-	-- terra() : double
-	-- 	var proc = [mem(pfn(terra(x: int) return [bool](flip(0.8)) end))]
-	-- 	var items = Vector.fromItems(1, 2, 3)
-	-- 	var p1 = proc(uniformDraw(items))
-	-- 	var p2 = proc(uniformDraw(items))
-	-- 	m.destruct(items)
-	-- 	m.destruct(proc)
-	-- 	return [int](p1 and p2)
-	-- end,
-	-- 0.6933333333333334)]
+	[mhtest(
+	"memoized flip with random argument, unconditioned",
+	function()
+		return terra() : double
+			var proc = [mem(pfn(terra(x: int) return [bool]([flip(0.8, {structural=maybenot()})]) end))]
+			var items = Vector.fromItems(1, 2, 3)
+			var p1 = proc([uniformDraw(items)])
+			var p2 = proc([uniformDraw(items)])
+			m.destruct(items)
+			m.destruct(proc)
+			return [int](p1 and p2)
+		end
+	end,
+	0.6933333333333334)]
 
-	-- [mhtest(
-	-- "memoized random procedure, unconditioned",
-	-- terra() : double
-	-- 	var proc1 = [mem(pfn(terra(x: int) return [bool](flip(0.2)) end))]
-	-- 	var proc2 = [mem(pfn(terra(x: int) return [bool](flip(0.8)) end))]
-	-- 	var mp1: bool
-	-- 	var mp2: bool
-	-- 	if [bool](flip(0.7)) then
-	-- 		mp1 = proc1(1)
-	-- 		mp2 = proc1(2)
-	-- 	else
-	-- 		mp1 = proc2(1)
-	-- 		mp2 = proc2(2)
-	-- 	end
-	-- 	m.destruct(proc1)
-	-- 	m.destruct(proc2)
-	-- 	return [int](mp1 and mp2)
-	-- end,
-	-- 0.22)]
+	[mhtest(
+	"memoized random procedure, unconditioned",
+	function()
+		return terra() : double
+			var proc1 = [mem(pfn(terra(x: int) return [bool]([flip(0.2, {structural=maybenot()})]) end))]
+			var proc2 = [mem(pfn(terra(x: int) return [bool]([flip(0.8, {structural=maybenot()})]) end))]
+			var mp1: bool
+			var mp2: bool
+			if [bool]([flip(0.7)]) then
+				mp1 = proc1(1)
+				mp2 = proc1(2)
+			else
+				mp1 = proc2(1)
+				mp2 = proc2(2)
+			end
+			m.destruct(proc1)
+			m.destruct(proc2)
+			return [int](mp1 and mp2)
+		end
+	end,
+	0.22)]
 
-	-- [mhtest(
-	-- "mh query over rejection query for conditioned flip",
-	-- terra() : double
-	-- 	return [rejectionSample(terra()
-	-- 		var a = flip(0.7)
-	-- 		condition([bool]([call("bitflip", 0.8, a)]))
-	-- 		return (a)
-	-- 	end)]
-	-- end,
-	-- 0.903225806451613)]
+	-- -- This doesn't work anymore. Figure out what went wrong...
+	[mhtest(
+	"mh query over rejection query for conditioned flip",
+	function()
+		local bitflip = pfn(terra(fidelity: double, x: int)
+			var p = fidelity
+			if not [bool](x) then p = 1.0 - fidelity end
+			return [flip(p, {structural=maybenot()})]
+		end)
+		return terra() : double
+			return [rejectionSample(function()
+				return terra()
+					var a = [flip(0.7, {structural=maybenot()})]
+					condition([bool](bitflip(0.8, a)))
+					return a
+				end
+			end)]
+		end
+	end,
+	0.903225806451613)]
 
-	-- [mhtest(
-	-- "trans-dimensional",
-	-- terra() : double
-	-- 	var a = 0.7
-	-- 	if [bool](flip(0.9)) then
-	-- 		a = beta(1, 5)
-	-- 	end
-	-- 	var b = flip(a)
-	-- 	condition([bool](b))
-	-- 	return a
-	-- end,
-	-- 0.417)]
+	[mhtest(
+	"trans-dimensional",
+	function()
+		return terra() : double
+			var a = 0.7
+			if [bool]([flip(0.9)]) then
+				a = [beta(1, 5, {structural=maybenot()})]
+			end
+			var b = [flip(a, {structural=maybenot()})]
+			condition([bool](b))
+			return a
+		end
+	end,
+	0.417)]
 
 	-- -- -- TODO: LARJ version of transdimensional test
 	-- -- -----------------------------------------------
-	-- -- [mhtest(
-	-- -- "trans-dimensional",
-	-- -- terra() : double
-	-- -- 	var a = 0.7
-	-- -- 	if [bool](flip(0.9)) then
-	-- -- 		a = beta(1, 5)
-	-- -- 	end
-	-- -- 	var b = flip(a)
-	-- -- 	condition([bool](b))
-	-- -- 	return a
-	-- -- end,
-	-- -- 0.417)]
-
 	-- [mhtest(
-	-- "memoized flip in if branch (create/destroy memprocs), unconditioned",
-	-- terra() : double
-	-- 	var a = [mem(flip)]
-	-- 	if [bool](flip(0.5)) then
-	-- 		m.destruct(a)
-	-- 		a = [mem(flip)]
-	-- 	end
-	-- 	var b = a(0.5)
-	-- 	m.destruct(a)
-	-- 	return b
-	-- end,
-	-- 0.5)]
-
-
-	-- -- Tests for things specific to new implementation
-
-	-- [mhtest(
-	-- "native loop",
-	-- terra() : double
-	-- 	var accum = 0
-	-- 	for i=0,4 do
-	-- 		accum = accum + flip(0.5, {structural=false})
-	-- 	end
-	-- 	return accum / 4.0
-	-- end,
-	-- 0.5)]
-
-	-- [mhtest(
-	-- "directly conditioning variable value",
-	-- terra() : double
-	-- 	var accum = 0
-	-- 	for i=0,10 do
-	-- 		if i < 5 then
-	-- 			accum = accum + flip(0.5, {constrainTo=1})
-	-- 		else
-	-- 			accum = accum + flip(0.5)
+	-- "trans-dimensional",
+	-- function()
+	-- 	return terra() : double
+	-- 		var a = 0.7
+	-- 		if [bool]([flip(0.9)]) then
+	-- 			a = [beta(1, 5, {structural=maybenot()})]
 	-- 		end
+	-- 		var b = [flip(a, {structural=maybenot()})]
+	-- 		condition([bool](b))
+	-- 		return a
 	-- 	end
-	-- 	return accum / 10.0
 	-- end,
-	-- 0.75)]
+	-- 0.417)]
+
+	[mhtest(
+	"memoized flip in if branch (create/destroy memprocs), unconditioned",
+	function()
+		local nflip = terra(x: double) return [flip(x, {structural=maybenot()})] end
+		return terra() : double
+			var a = [mem(nflip)]
+			if [bool]([flip(0.5, {structural=maybenot()})]) then
+				m.destruct(a)
+				a = [mem(nflip)]
+			end
+			var b = a(0.5)
+			m.destruct(a)
+			return b
+		end
+	end,
+	0.5)]
+
+
+	-- Tests for things specific to new implementation
+
+	[mhtest(
+	"native loop",
+	function()
+		return terra() : double
+			var accum = 0
+			for i=0,4 do
+				accum = accum + [flip(0.5, {structural=maybenot()})]
+			end
+			return accum / 4.0
+		end
+	end,
+	0.5)]
+
+	[mhtest(
+	"directly conditioning variable value",
+	function()
+		return terra() : double
+			var accum = 0
+			for i=0,10 do
+				if i < 5 then
+					accum = accum + [flip(0.5, {structural=maybenot(), constrainTo=1})]
+				else
+					accum = accum + [flip(0.5, {structural=maybenot()})]
+				end
+			end
+			return accum / 10.0
+		end
+	end,
+	0.75)]
+
 
 	var t2 = C.currentTimeInSeconds()
 
@@ -592,8 +646,8 @@ local terra doTests()
 end
 
 -- local prof = terralib.require("/Users/dritchie/Git/terra/tests/lib/prof")
--- prof.begin()
 doTests()
+-- prof.begin()
 doTests()
 -- prof.finish()
 
