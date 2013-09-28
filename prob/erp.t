@@ -266,6 +266,8 @@ local function makeERP(sample, logprobfn, propose)
 				end
 				erpfn:adddefinition(def:getdefinitions()[1])
 			end
+			-- erpfn:printpretty()
+			-- print("-----------")
 			-- The ERP must push an ID to the callsite stack.
 			erpfn = trace.pfn(erpfn)
 			return erpfn
@@ -279,7 +281,8 @@ local function makeERP(sample, logprobfn, propose)
 		for i=1,numparams do table.insert(params, (select(i,...))) end
 		local optable = (select(numparams+1, ...)) or {}
 		-- Defaulting to 'structural=true' is more sensible.
-		local isstruct = optable["structural"] or true
+		local isstruct = true
+		if optable["structural"] ~= nil then isstruct = optable["structural"] end
 		local condVal = optable["constrainTo"]
 		local erpfn = genErpFunction()
 		if condVal then

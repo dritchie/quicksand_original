@@ -57,7 +57,7 @@ local function pfn(fn)
 		-- If we're compiling a specialization with no structure change, then
 		-- don't do any address tracking
 		if not specialize.globalParam("structureChange") then
-			return `fn([args])
+			return `[data.definition]([args])
 		end
 		-- Every call gets a unique id
 		local myid = nextid
@@ -407,8 +407,9 @@ local RandExecTrace = templatize(function(computation)
 	-- Generate specialized 'traceUpdate' code
 	Trace.traceUpdate = templatize(function(...)
 		local structureChange = specialize.paramFromList("structureChange",...)
-		local args = {}
-		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
+		local speccomp = specialize.specializeWithParams(computation, ...)
+		-- speccomp:printpretty()
+		-- print("-----------")
 		return terra(self: &Trace) : {}
 			-- Assume ownership of the global trace
 			var prevtrace = globalTrace
@@ -440,7 +441,7 @@ local RandExecTrace = templatize(function(computation)
 			quote end]
 
 			-- Run computation
-			self.returnValue = [specialize.specializeWithParams(computation, unpack(args))]()
+			self.returnValue = speccomp()
 
 			-- Clean up
 			self.loopcounters:clear()
