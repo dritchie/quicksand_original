@@ -14,12 +14,6 @@ local function addParam(name, defaultValue)
 	table.insert(names, name)
 end
 
-local function resetParamsToDefaults()
-	for k,v in pairs(defaults) do
-		values[k] = v
-	end
-end
-
 -- Extract parameter by name from ordered list (all present)
 local function paramFromList(name, ...)
 	local ret = (select(indices[name], ...))
@@ -54,12 +48,10 @@ local function globalParam(name)
 end
 
 local specializeWithParams = templatize(function(computation, ...)
-	local ptbl = paramListToTable(...)
-	for name,value in pairs(ptbl) do
-		values[name] = value
-	end
+	local currptable = values
+	values = paramListToTable(...)
 	local comp = computation()
-	resetParamsToDefaults()
+	values = currptable
 	return comp
 end)
 

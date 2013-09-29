@@ -318,8 +318,6 @@ local function traceUpdate(trace, paramTable)
 	local vtableindex = id-1
 	paramTables[id] = paramTable
 	return quote
-		-- C.printf("id: %u\n", id)
-		-- C.printf("vtable size: %u\n", trace.traceUpdateVtable.size)
 		var fnptr : TraceUpdateFnPtr = trace.traceUpdateVtable:get(vtableindex)
 	in
 		fnptr(trace)
