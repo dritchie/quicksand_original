@@ -107,7 +107,7 @@ local terra doTests()
 	[fwdtest(
 	"flip sample",
 	terra() : double
-		return [flip(0.7)]
+		return double([flip(0.7)])
 	end,
 	0.7)]
 
@@ -115,7 +115,7 @@ local terra doTests()
 	"flip query",
 	function()
 		return terra() : double
-			return [flip(0.7, {structural=maybenot()})]
+			return double([flip(0.7, {structural=maybenot()})])
 		end
 	end,
 	0.7)]
@@ -297,14 +297,14 @@ local terra doTests()
 	{-1.9205584583201643, -1.8560199371825927, -2.821100833226181})]
 
 
-	-- Tests adapted from Church
+	-- -- Tests adapted from Church
 
 	[mhtest(
 	"setting a flip",
 	function()
 		return terra() : double
 			var a = 1.0/1000
-			condition([bool]([flip(a, {structural=maybenot()})]))
+			condition([flip(a, {structural=maybenot()})])
 			return a
 		end
 	end,
@@ -314,10 +314,10 @@ local terra doTests()
 	"and conditioned on or",
 	function()
 		return terra() : double
-			var a = [bool]([flip(0.5, {structural=maybenot()})])
-			var b = [bool]([flip(0.5, {structural=maybenot()})])
+			var a = [flip(0.5, {structural=maybenot()})]
+			var b = [flip(0.5, {structural=maybenot()})]
 			condition(a or b)
-			return [int](a and b)
+			return double(a and b)
 		end
 	end,
 	1.0/3)]
@@ -326,10 +326,10 @@ local terra doTests()
 	"and conditioned on or, biased flip",
 	function()
 		return terra() : double
-			var a = [bool]([flip(0.3, {structural=maybenot()})])
-			var b = [bool]([flip(0.3, {structural=maybenot()})])
+			var a = [flip(0.3, {structural=maybenot()})]
+			var b = [flip(0.3, {structural=maybenot()})]
 			condition(a or b)
-			return [int](a and b)
+			return double(a and b)
 		end
 	end,
 	(0.3*0.3) / (0.3*0.3 + 0.7*0.3 + 0.3*0.7))]
@@ -337,15 +337,15 @@ local terra doTests()
 	[mhtest(
 	"conditioned flip",
 	function()
-		local bitflip = pfn(terra(fidelity: double, x: int)
+		local bitflip = pfn(terra(fidelity: double, x: bool)
 			var p = fidelity
-			if not [bool](x) then p = 1.0 - fidelity end
+			if not x then p = 1.0 - fidelity end
 			return [flip(p, {structural=maybenot()})]
 		end)
 		return terra() : double
 			var hyp = [flip(0.7, {structural=maybenot()})]
-			condition([bool](bitflip(0.8, hyp)))
-			return hyp
+			condition(bitflip(0.8, hyp))
+			return double(hyp)
 		end
 	end,
 	(0.7*0.8) / (0.7*0.8 + 0.3*0.2))]
@@ -354,10 +354,10 @@ local terra doTests()
 	"random 'if' with random branches, unconditioned",
 	function()
 		return terra() : double
-			if [bool]([flip(0.7)]) then
-				return [flip(0.2, {structural=maybenot()})]
+			if [flip(0.7)] then
+				return double([flip(0.2, {structural=maybenot()})])
 			else
-				return [flip(0.8, {structural=maybenot()})]
+				return double([flip(0.8, {structural=maybenot()})])
 			end
 		end
 	end,
@@ -368,12 +368,12 @@ local terra doTests()
 	function()
 		return terra() : double
 			var weight: double
-			if [bool]([flip(0.7, {structural=maybenot()})]) then
+			if [flip(0.7, {structural=maybenot()})] then
 				weight = 0.2
 			else
 				weight = 0.8
 			end
-			return [flip(weight, {structural=maybenot()})]
+			return double([flip(weight, {structural=maybenot()})])
 		end
 	end,
 	0.7*0.2 + 0.3*0.8)]
@@ -384,10 +384,10 @@ local terra doTests()
 		local p1 = pfn(terra() return [flip(0.2, {structural=maybenot()})] end)
 		local p2 = pfn(terra() return [flip(0.8, {structural=maybenot()})] end)
 		return terra() : double
-			if [bool]([flip(0.7)]) then
-				return p1()
+			if [flip(0.7)] then
+				return double(p1())
 			else
-				return p2()
+				return double(p2())
 			end
 		end
 	end,
@@ -397,7 +397,7 @@ local terra doTests()
 	"conditioned multinomial",
 	function()
 		local observe = pfn(terra(x: int)
-			if [bool]([flip(0.8, {structural=maybenot()})]) then
+			if [flip(0.8, {structural=maybenot()})] then
 				return x
 			else
 				return 0
@@ -408,7 +408,7 @@ local terra doTests()
 			var hyp = [multinomial(probs, {structural=maybenot()})]
 			condition(observe(hyp) == 0)
 			m.destruct(probs)
-			return [int](hyp == 0)
+			return double(hyp == 0)
 		end
 	end,
 	0.357)]
@@ -418,7 +418,7 @@ local terra doTests()
 	function()
 		local powerLaw = pfn()
 		powerLaw:define(terra(prob: double, x: int) : int
-			if [bool]([flip(prob)]) then
+			if [flip(prob)] then
 				return x
 			else
 				return powerLaw(prob, x+1)
@@ -426,7 +426,7 @@ local terra doTests()
 		end)
 		return terra() : double
 			var a = powerLaw(0.3, 1)
-			return [int](a < 5)
+			return double(a < 5)
 		end
 	end,
 	0.7599)]
@@ -436,7 +436,7 @@ local terra doTests()
 	function()
 		local powerLaw = pfn()
 		powerLaw:define(terra(prob: double, x: int) : int
-			if [bool]([flip(prob)]) then
+			if [flip(prob)] then
 				return x
 			else
 				return 0 + powerLaw(prob, x+1)
@@ -444,7 +444,7 @@ local terra doTests()
 		end)
 		return terra() : double
 			var a = powerLaw(0.3, 1)
-			return [int](a < 5)
+			return double(a < 5)
 		end
 	end,
 	0.7599)]
@@ -453,13 +453,13 @@ local terra doTests()
 	"memoized flip, unconditioned",
 	function()
 		return terra() : double
-			var proc = [mem(pfn(terra(x: int) return [bool]([flip(0.8, {structural=maybenot()})]) end))]
+			var proc = [mem(pfn(terra(x: int) return [flip(0.8, {structural=maybenot()})] end))]
 			var p11 = proc(1)	
 			var p21 = proc(2)
 			var p12 = proc(1)
 			var p22 = proc(2)
 			m.destruct(proc)
-			return [int](p11 and p21 and p22)
+			return double(p11 and p21 and p22)
 		end
 	end,
 	0.64)]
@@ -468,13 +468,13 @@ local terra doTests()
 	"memoized flip, conditioned",
 	function()
 		return terra() : double
-			var proc = [mem(pfn(terra(x: int) return [bool]([flip(0.2, {structural=maybenot()})]) end))]
+			var proc = [mem(pfn(terra(x: int) return [flip(0.2, {structural=maybenot()})] end))]
 			var p1 = proc(1)	
 			var p21 = proc(2)
 			var p22 = proc(2)
 			var p23 = proc(2)
 			condition(p1 or p21 or p22 or p23)
-			var ret = [int](proc(1))
+			var ret = double(proc(1))
 			m.destruct(proc)
 			return ret
 		end
@@ -488,11 +488,11 @@ local terra doTests()
 	function()
 		return terra() : double
 			var a = [flip(0.8, {structural=maybenot()})]
-			var proc = [mem(pfn(terra(a: int) return [bool](a) end))]
+			var proc = [mem(pfn(terra(a: bool) return a end))]
 			var p11 = proc(a)
 			var p12 = proc(a)
 			m.destruct(proc)
-			return [int](p11 and p12)
+			return double(p11 and p12)
 		end
 	end,
 	0.8)]
@@ -501,13 +501,13 @@ local terra doTests()
 	"memoized flip with random argument, unconditioned",
 	function()
 		return terra() : double
-			var proc = [mem(pfn(terra(x: int) return [bool]([flip(0.8, {structural=maybenot()})]) end))]
+			var proc = [mem(pfn(terra(x: int) return [flip(0.8, {structural=maybenot()})] end))]
 			var items = Vector.fromItems(1, 2, 3)
 			var p1 = proc([uniformDraw(items)])
 			var p2 = proc([uniformDraw(items)])
 			m.destruct(items)
 			m.destruct(proc)
-			return [int](p1 and p2)
+			return double(p1 and p2)
 		end
 	end,
 	0.6933333333333334)]
@@ -516,11 +516,11 @@ local terra doTests()
 	"memoized random procedure, unconditioned",
 	function()
 		return terra() : double
-			var proc1 = [mem(pfn(terra(x: int) return [bool]([flip(0.2, {structural=maybenot()})]) end))]
-			var proc2 = [mem(pfn(terra(x: int) return [bool]([flip(0.8, {structural=maybenot()})]) end))]
+			var proc1 = [mem(pfn(terra(x: int) return [flip(0.2, {structural=maybenot()})] end))]
+			var proc2 = [mem(pfn(terra(x: int) return [flip(0.8, {structural=maybenot()})] end))]
 			var mp1: bool
 			var mp2: bool
-			if [bool]([flip(0.7)]) then
+			if [flip(0.7)] then
 				mp1 = proc1(1)
 				mp2 = proc1(2)
 			else
@@ -529,26 +529,25 @@ local terra doTests()
 			end
 			m.destruct(proc1)
 			m.destruct(proc2)
-			return [int](mp1 and mp2)
+			return double(mp1 and mp2)
 		end
 	end,
 	0.22)]
 
-	-- -- This doesn't work anymore. Figure out what went wrong...
 	[mhtest(
 	"mh query over rejection query for conditioned flip",
 	function()
-		local bitflip = pfn(terra(fidelity: double, x: int)
+		local bitflip = pfn(terra(fidelity: double, x: bool)
 			var p = fidelity
-			if not [bool](x) then p = 1.0 - fidelity end
+			if not x then p = 1.0 - fidelity end
 			return [flip(p, {structural=maybenot()})]
 		end)
 		return terra() : double
 			return [rejectionSample(function()
 				return terra()
 					var a = [flip(0.7, {structural=maybenot()})]
-					condition([bool](bitflip(0.8, a)))
-					return a
+					condition(bitflip(0.8, a))
+					return double(a)
 				end
 			end)]
 		end
@@ -560,28 +559,26 @@ local terra doTests()
 	function()
 		return terra() : double
 			var a = 0.7
-			if [bool]([flip(0.9)]) then
+			if [flip(0.9)] then
 				a = [beta(1, 5, {structural=maybenot()})]
 			end
 			var b = [flip(a, {structural=maybenot()})]
-			condition([bool](b))
+			condition(b)
 			return a
 		end
 	end,
 	0.417)]
 
-	-- -- -- TODO: LARJ version of transdimensional test
-	-- -- -----------------------------------------------
 	-- [mhtest(
-	-- "trans-dimensional",
+	-- "trans-dimensional (LARJ)",
 	-- function()
 	-- 	return terra() : double
 	-- 		var a = 0.7
-	-- 		if [bool]([flip(0.9)]) then
+	-- 		if [flip(0.9)] then
 	-- 			a = [beta(1, 5, {structural=maybenot()})]
 	-- 		end
 	-- 		var b = [flip(a, {structural=maybenot()})]
-	-- 		condition([bool](b))
+	-- 		condition(b)
 	-- 		return a
 	-- 	end
 	-- end,
@@ -593,19 +590,19 @@ local terra doTests()
 		local nflip = terra(x: double) return [flip(x, {structural=maybenot()})] end
 		return terra() : double
 			var a = [mem(nflip)]
-			if [bool]([flip(0.5, {structural=maybenot()})]) then
+			if [flip(0.5, {structural=maybenot()})] then
 				m.destruct(a)
 				a = [mem(nflip)]
 			end
 			var b = a(0.5)
 			m.destruct(a)
-			return b
+			return double(b)
 		end
 	end,
 	0.5)]
 
 
-	-- Tests for things specific to new implementation
+	-- -- Tests for things specific to new implementation
 
 	[mhtest(
 	"native loop",
@@ -613,7 +610,7 @@ local terra doTests()
 		return terra() : double
 			var accum = 0
 			for i=0,4 do
-				accum = accum + [flip(0.5, {structural=maybenot()})]
+				accum = accum + int([flip(0.5, {structural=maybenot()})])
 			end
 			return accum / 4.0
 		end
@@ -627,9 +624,9 @@ local terra doTests()
 			var accum = 0
 			for i=0,10 do
 				if i < 5 then
-					accum = accum + [flip(0.5, {structural=maybenot(), constrainTo=1})]
+					accum = accum + int([flip(0.5, {structural=maybenot(), constrainTo=true})])
 				else
-					accum = accum + [flip(0.5, {structural=maybenot()})]
+					accum = accum + int([flip(0.5, {structural=maybenot()})])
 				end
 			end
 			return accum / 10.0

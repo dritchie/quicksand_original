@@ -310,11 +310,11 @@ local erp = {makeERP = makeERP}
 erp.flip =
 makeERP(random.flip_sample(double),
 		random.flip_logprob(double),
-		terra(currval: double, p: double)
-			if currval == 0 then
-				return 1, 0.0, 0.0
+		terra(currval: bool, p: double)
+			if currval then
+				return false, 0.0, 0.0
 			else
-				return 0, 0.0, 0.0
+				return true, 0.0, 0.0
 			end
 		end)
 

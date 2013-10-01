@@ -59,14 +59,14 @@ fns.random = random
 specialize("flip_sample", 1, function(V, P)
 	return terra(p: P)
 		var randval = random()
-		return [int](randval < p)
+		return (randval < p)
 	end
 end)
 
 specialize("flip_logprob", 1, function(V, P)
-	return terra(val: int, p: P)
+	return terra(val: bool, p: P)
 		var prob: P
-		if val ~= 0 then
+		if val then
 			prob = p
 		else
 			prob = 1.0 - p
