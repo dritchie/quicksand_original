@@ -39,15 +39,16 @@ local function makeKernelGenerator(kernelfn, defaults)
 	-- No overloaded kernel functions (what are you, crazy?!?)
 	assert(#kernelfn:getdefinitions() == 1)
 	return function(paramtable)
-		paramtable = paramtable or nil
+		paramtable = paramtable or {}
 		-- Extract all needed arguments, either from paramtable
 		--    or from defaults
 		-- Throw an error if something is missing.
 		local args = {}
 		for _,param in ipairs(kernelfn:getdefinitions()[1].untypedtree.parameters) do
 			local n = param.name
-			local arg = paramtable[n] or defaults[n]
-			if not arg then
+			local arg = paramtable[n]
+			if arg == nil then arg = defaults[n] end
+			if arg == nil then
 				error(string.format("No provided or default value for kernel parameter '%s'", n)) 
 			end
 			table.insert(args, arg)
@@ -102,10 +103,10 @@ terra RandomWalkKernel:next(currTrace: &BaseTrace)
 		-- C.printf("--------------------------\n")
 		-- C.printf("currTrace.logprob:    %g\n", currTrace.logprob)
 		-- C.printf("nextTrace.logprob:    %g\n", nextTrace.logprob)
+		-- C.printf("nextTrace.newlogprob:    %g\n", nextTrace.newlogprob)
+		-- C.printf("nextTrace.oldlogprob:    %g\n", nextTrace.oldlogprob)
 		-- C.printf("fwdPropLP:    %g\n", fwdPropLP)
 		-- C.printf("rvsPropLP:    %g\n", rvsPropLP)
-		-- C.printf("oldNumVars:    %d\n", oldNumVars)
-		-- C.printf("newNumVars:    %d\n", newNumVars)
 		if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
 			-- C.printf("ACCEPTED\n")
 			self.proposalsAccepted = self.proposalsAccepted + 1
@@ -120,7 +121,7 @@ terra RandomWalkKernel:next(currTrace: &BaseTrace)
 	return nextTrace
 end
 
-terra RandomWalkKernel:name() return RandomWalkKernel.name end
+terra RandomWalkKernel:name() return [RandomWalkKernel.name] end
 
 terra RandomWalkKernel:stats()
 	C.printf("Acceptance ratio: %g (%u/%u)\n",
@@ -135,10 +136,10 @@ m.addConstructors(RandomWalkKernel)
 
 -- Convenience method for making RandomWalkKernels
 local RandomWalk = makeKernelGenerator(
-	terra()
-		return RandomWalkKernel.heapAlloc(true, true)
+	terra(structural: bool, nonstructural: bool)
+		return RandomWalkKernel.heapAlloc(structural, nonstructural)
 	end,
-	{})
+	{structural=true, nonstructural=true})
 
 
 
@@ -165,7 +166,7 @@ terra MultiKernel:next(currTrace: &BaseTrace)
 	return self.kernels:get(whichKernel):next(currTrace)
 end
 
-terra MultiKernel:name() return MultiKernel.name end
+terra MultiKernel:name() return [MultiKernel.name] end
 
 terra MultiKernel:stats()
 	for i=0,self.kernels.size do

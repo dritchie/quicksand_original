@@ -335,9 +335,9 @@ local function traceUpdate(trace, paramTable)
 	local vtableindex = id-1
 	paramTables[id] = paramTable
 	return quote
-		var fnptr : TraceUpdateFnPtr = trace.traceUpdateVtable:get(vtableindex)
+		var fnptr : TraceUpdateFnPtr = [trace].traceUpdateVtable:get(vtableindex)
 	in
-		fnptr(trace)
+		fnptr([trace])
 	end
 end
 local vmethods = {} -- Hold on to these to prevent GC
@@ -423,8 +423,6 @@ local RandExecTrace = templatize(function(computation)
 	Trace.traceUpdate = templatize(function(...)
 		local structureChange = specialize.paramFromList("structureChange",...)
 		local speccomp = specialize.specializeWithParams(computation, ...)
-		-- speccomp:printpretty()
-		-- print("-----------")
 		return terra(self: &Trace) : {}
 			-- Assume ownership of the global trace
 			var prevtrace = globalTrace

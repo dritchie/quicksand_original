@@ -16,10 +16,14 @@ double currentTimeInSeconds() {
     gettimeofday(&tv, NULL);
     return tv.tv_sec + tv.tv_usec / 1000000.0;
 }
+void initrand() { srand(time(NULL)); }
 ]]
+
+C.initrand()
 
 local numsamps = 150
 local lag = 20
+local larjAnnealSteps = 10
 local runs = 5
 local errorTolerance = 0.07
 
@@ -60,6 +64,20 @@ local function mhtest(name, computation, trueExpectation)
 		var estimates = [Vector(double)].stackAlloc()
 		for run=0,runs do
 			var samps = [mcmc(computation, RandomWalk(), {numsamps=numsamps, lag=lag, verbose=false})]
+			estimates:push([expectation(double)](&samps))
+			m.destruct(samps)
+		end
+		test(name, &estimates, trueExpectation)
+		m.destruct(estimates)
+	end
+end
+
+local function larjtest(name, computation, trueExpectation)
+	local kernel = LARJ(RandomWalk({structural=false}))({intervals=larjAnnealSteps})
+	return quote
+		var estimates = [Vector(double)].stackAlloc()
+		for run=0,runs do
+			var samps = [mcmc(computation, kernel, {numsamps=numsamps, lag=lag, verbose=false})]
 			estimates:push([expectation(double)](&samps))
 			m.destruct(samps)
 		end
@@ -569,20 +587,20 @@ local terra doTests()
 	end,
 	0.417)]
 
-	-- [mhtest(
-	-- "trans-dimensional (LARJ)",
-	-- function()
-	-- 	return terra() : double
-	-- 		var a = 0.7
-	-- 		if [flip(0.9)] then
-	-- 			a = [beta(1, 5, {structural=maybenot()})]
-	-- 		end
-	-- 		var b = [flip(a, {structural=maybenot()})]
-	-- 		condition(b)
-	-- 		return a
-	-- 	end
-	-- end,
-	-- 0.417)]
+	[larjtest(
+	"trans-dimensional (LARJ)",
+	function()
+		return terra() : double
+			var a = 0.7
+			if [flip(0.9)] then
+				a = [beta(1, 5, {structural=maybenot()})]
+			end
+			var b = [flip(a, {structural=maybenot()})]
+			condition(b)
+			return a
+		end
+	end,
+	0.417)]
 
 	[mhtest(
 	"memoized flip in if branch (create/destroy memprocs), unconditioned",

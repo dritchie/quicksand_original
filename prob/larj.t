@@ -32,14 +32,14 @@ local struct InterpolationRandVar
 inheritance.dynamicExtend(RandVar, InterpolationRandVar)
 
 terra InterpolationRandVar:__construct(rv1: &RandVar, rv2: &RandVar)
-	BaseTrace.__construct(self, rv1.isStructural, rv2.isDirectlyConditioned)
+	RandVar.__construct(self, rv1.isStructural, rv2.isDirectlyConditioned)
 	self.logprob = rv1.logprob
 	self.rv1 = rv1
 	self.rv2 = rv2
 end
 
 terra InterpolationRandVar:__copy(other: &InterpolationRandVar)
-	BaseTrace.__copy(self, other)
+	RandVar.__copy(self, other)
 	self.rv1 = other.rv1
 	self.rv2 = other.rv2
 end
@@ -95,11 +95,12 @@ terra InterpolationTrace:clearVarList()
 end
 
 terra InterpolationTrace:buildVarList()
-	self:clearVarList()
+	self.varlist = [Vector(&RandVar)].stackAlloc()
+	self.interpvars = [Vector(&InterpolationRandVar)].stackAlloc()
 	var it = self.trace1.vars:iterator()
 	util.foreach(it, [quote
 		var k, v1 = it:keyvalPointer()
-		var v2 = self.trace2:getPointer(@k)
+		var v2 = self.trace2.vars:getPointer(@k)
 		var n1 = v1.size
 		var n2 = 0
 		if v2 ~= nil then n2 = v2.size end
@@ -145,8 +146,9 @@ end
 
 terra InterpolationTrace:__copy(trace: &InterpolationTrace)
 	BaseTrace.__copy(self, trace)
-	self.trace1 = trace.trace1:deepcopy()
-	self.trace2 = trace.trace2:deepcopy()
+	self.traceUpdateVtable = trace.traceUpdateVtable
+	self.trace1 = [&GlobalTrace](trace.trace1:deepcopy())
+	self.trace2 = [&GlobalTrace](trace.trace2:deepcopy())
 	self.alpha = trace.alpha
 	self:updateLPCond()
 	self:buildVarList()
@@ -172,12 +174,19 @@ terra InterpolationTrace:varListPointer() : &Vector(&RandVar)
 end
 inheritance.virtual(InterpolationTrace, "varListPointer")
 
+terra InterpolationTrace:setAlpha(alpha: double)
+	self.alpha = alpha
+	self:updateLPCond()
+end
+
 -- Generate specialized 'traceUpdate code'
 InterpolationTrace.traceUpdate = templatize(function(...)
 	local paramtable = specialize.paramListToTable(...)
-	return terra(self: &InterpolationTrace)
-		[trace.traceUpdate(self.trace1, paramtable)]
-		[trace.traceUpdate(self.trace2, paramtable)]
+	return terra(self: &InterpolationTrace) : {}
+		var t1 = self.trace1
+		var t2 = self.trace2
+		[trace.traceUpdate(t1, paramtable)]
+		[trace.traceUpdate(t2, paramtable)]
 		self:updateLPCond()
 	end
 end)
@@ -211,7 +220,7 @@ terra LARJKernel:__destruct()
 	m.destruct(self.diffKernel)
 end
 
-terra LARJKernel:next(currTrace: &BaseTrace)
+terra LARJKernel:next(currTrace: &BaseTrace)  : &BaseTrace
 	self.jumpProposalsMade = self.jumpProposalsMade + 1
 	var oldStructTrace = [&GlobalTrace](currTrace:deepcopy())
 	var newStructTrace = [&GlobalTrace](currTrace:deepcopy())
@@ -223,7 +232,7 @@ terra LARJKernel:next(currTrace: &BaseTrace)
 	[trace.traceUpdate(newStructTrace)]
 	var oldNumStructVars = freevars.size
 	var newNumStructVars = newStructTrace:numFreeVars(true, false)
-	fwdPropLP = fwdPropLP + newStructTrace.logprob - C.log(oldNumStructVars)
+	fwdPropLP = fwdPropLP + newStructTrace.newlogprob - C.log(oldNumStructVars)
 	m.destruct(freevars)
 
 	-- Do annealing, if more than zero annealing steps specified.
@@ -231,10 +240,10 @@ terra LARJKernel:next(currTrace: &BaseTrace)
 	if self.intervals > 0 and self.stepsPerInterval > 0 then
 		var lerpTrace = InterpolationTrace.heapAlloc(oldStructTrace, newStructTrace)
 		for ival=0,self.intervals do
-			lerpTrace.alpha = ival/(self.intervals-1.0)
+			lerpTrace:setAlpha(ival/(self.intervals-1.0))
 			for step=0,self.stepsPerInterval do
 				annealingLpRatio = annealingLpRatio + lerpTrace.logprob
-				lerpTrace = self.diffusionKernel:next(lerpTrace)
+				lerpTrace = [&InterpolationTrace](self.diffusionKernel:next(lerpTrace))
 				annealingLpRatio = annealingLpRatio - lerpTrace.logprob
 			end
 		end
@@ -258,17 +267,15 @@ terra LARJKernel:next(currTrace: &BaseTrace)
 	end
 end
 
-terra LARJKernel:name() return LARJKernel.name end
+terra LARJKernel:name()return [LARJKernel.name] end
 
 terra LARJKernel:stats()
 	C.printf("==JUMP==\nAcceptance ratio: %g (%u/%u)\n",
 		[double](self.jumpProposalsAccepted)/self.jumpProposalsMade,
 		self.jumpProposalsAccepted,
 		self.jumpProposalsMade)
-	if self.annealingProposalsMade > 0 then
-		C.printf("==ANNEALING==\n")
-		self.diffusionKernel:stats()
-	end
+	C.printf("==ANNEALING==\n")
+	self.diffusionKernel:stats()
 end
 
 m.addConstructors(LARJKernel)
@@ -281,12 +288,12 @@ m.addConstructors(LARJKernel)
 --    using the same kernel for both if only one is specified.
 local function LARJ(diffKernelGen, annealKernelGen)
 	assert(diffKernelGen)
-	annealKernelGen = annealKernelGen or diffusionKernel
+	annealKernelGen = annealKernelGen or diffKernelGen
 	return inf.makeKernelGenerator(
 		terra(jumpFreq: double, intervals: uint, stepsPerInterval: uint)
 			var diffKernel = diffKernelGen()
 			var jumpKernel = LARJKernel.heapAlloc(annealKernelGen(), intervals, stepsPerInterval)
-			var kernels = Vector.fromItems(diffKernel, jumpKernel)
+			var kernels = [Vector(MCMCKernel)].stackAlloc():fill(diffKernel, jumpKernel)
 			var freqs = Vector.fromItems(1.0-jumpFreq, jumpFreq)
 			return inf.MultiKernel.heapAlloc(kernels, freqs)
 		end,

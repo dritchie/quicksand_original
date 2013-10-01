@@ -274,8 +274,6 @@ local function makeERP(sample, logprobfn, propose)
 				end
 				erpfn:adddefinition(def:getdefinitions()[1])
 			end
-			-- erpfn:printpretty()
-			-- print("-----------")
 			-- The ERP must push an ID to the callsite stack.
 			erpfn = trace.pfn(erpfn)
 			return erpfn
