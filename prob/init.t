@@ -3,6 +3,7 @@ table.insert(modules, terralib.require("prob.erp"))
 table.insert(modules, terralib.require("prob.trace"))
 table.insert(modules, terralib.require("prob.inference"))
 table.insert(modules, terralib.require("prob.memoize"))
+table.insert(modules, terralib.require("prob.larj"))
 
 -- Forward exports
 local exports = {}

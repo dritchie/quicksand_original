@@ -19,7 +19,8 @@ inline void flush() { fflush(stdout); }
 -- Interface for all MCMC kernels
 local MCMCKernel = iface.create {
 	next = {&BaseTrace} -> {&BaseTrace};
-	stats = {} -> {}
+	stats = {} -> {};
+	name = {} -> {rawstring};
 }
 
 
@@ -119,6 +120,8 @@ terra RandomWalkKernel:next(currTrace: &BaseTrace)
 	return nextTrace
 end
 
+terra RandomWalkKernel:name() return RandomWalkKernel.name end
+
 terra RandomWalkKernel:stats()
 	C.printf("Acceptance ratio: %g (%u/%u)\n",
 		[double](self.proposalsAccepted)/self.proposalsMade,
@@ -143,20 +146,17 @@ local RandomWalk = makeKernelGenerator(
 local struct MultiKernel
 {
 	kernels: Vector(MCMCKernel),
-	names: Vector(rawstring),
 	freqs: Vector(double)
 }
 
 -- NOTE: Assumes ownership of arguments (read: does not copy)
-terra MultiKernel:__construct(kernels: Vector(MCMCKernel), names: Vector(rawstring), freqs: Vector(double))
+terra MultiKernel:__construct(kernels: Vector(MCMCKernel), freqs: Vector(double))
 	self.kernels = kernels
-	self.names = names
 	self.freqs = freqs
 end
 
 terra MultiKernel:__destruct()
 	m.destruct(self.kernels)
-	m.destruct(self.names)
 	m.destruct(self.freqs)
 end
 
@@ -165,9 +165,11 @@ terra MultiKernel:next(currTrace: &BaseTrace)
 	return self.kernels:get(whichKernel):next(currTrace)
 end
 
+terra MultiKernel:name() return MultiKernel.name end
+
 terra MultiKernel:stats()
 	for i=0,self.kernels.size do
-		C.printf("------ Kernel %d (%s) ------\n", i+1, self.names:get(i))
+		C.printf("------ Kernel %d (%s) ------\n", i+1, self.kernels:get(i):name())
 		self.kernels:get(i):stats()
 	end
 end
@@ -303,6 +305,7 @@ end
 
 return
 {
+	MCMCKernel = MCMCKernel,
 	makeKernelGenerator = makeKernelGenerator,
 	RandomWalk = RandomWalk,
 	MultiKernel = MultiKernel,

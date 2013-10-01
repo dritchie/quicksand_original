@@ -1,20 +1,21 @@
 local inheritance = terralib.require("inheritance")
 local templatize = terralib.require("templatize")
-local trace = terralib.require("trace")
+local trace = terralib.require("prob.trace")
 local BaseTrace = trace.BaseTrace
 local GlobalTrace = trace.GlobalTrace
 local m = terralib.require("mem")
-local erp = terralib.require("erph")
+local erp = terralib.require("prob.erph")
 local RandVar = erp.RandVar
 local util = terralib.require("util")
-local specialize = terralib.require("specialize")
-local inf = terralib.require("inference")
+local specialize = terralib.require("prob.specialize")
+local inf = terralib.require("prob.inference")
 local MCMCKernel = inf.MCMCKernel
 local Vector = terralib.require("vector")
-local rand = terralib.require("random")
+local rand = terralib.require("prob.random")
 
 local C = terralib.includecstring [[
 #include <math.h>
+#include <stdio.h>
 ]]
 
 
@@ -95,14 +96,15 @@ end
 
 terra InterpolationTrace:buildVarList()
 	self:clearVarList()
-	var n1 = self.trace1.varlist.size
-	var n2 = self.trace2.varlist.size
-	var minN = n1
-	if n2 < n1 then minN = n2 end
 	var it = self.trace1.vars:iterator()
 	util.foreach(it, [quote
 		var k, v1 = it:keyvalPointer()
 		var v2 = self.trace2:getPointer(@k)
+		var n1 = v1.size
+		var n2 = 0
+		if v2 ~= nil then n2 = v2.size end
+		var minN = n1
+		if n2 < n1 then minN = n2 end
 		-- Variables shared by both traces
 		for i=0,minN do
 			var ivar = InterpolationRandVar.heapAlloc(v1:get(i), v2:get(i))
@@ -110,18 +112,18 @@ terra InterpolationTrace:buildVarList()
 			self.interpvars:push(ivar)
 		end
 		-- Variables that only trace1 has
-		for i=minN,trace1.varlist.size do
+		for i=minN,n1 do
 			self.varlist:push(v1:get(i))
 		end
 		-- Variables that only trace2 has
-		for i=trace1.varlist.size,trace2.varlist.size do
+		for i=n1,n2 do
 			self.varlist:push(v2:get(i))
 		end
 	end])
 end
 
 terra InterpolationTrace:updateLPCond()
-	self.logprob = (1.0 - self.alpha)*self.trace1.logprob + alpha*self.trace2.logprob
+	self.logprob = (1.0 - self.alpha)*self.trace1.logprob + self.alpha*self.trace2.logprob
 	self.conditionsSatisfied = self.trace1.conditionsSatisfied and self.trace2.conditionsSatisfied
 end
 
@@ -173,9 +175,11 @@ inheritance.virtual(InterpolationTrace, "varListPointer")
 -- Generate specialized 'traceUpdate code'
 InterpolationTrace.traceUpdate = templatize(function(...)
 	local paramtable = specialize.paramListToTable(...)
-	[trace.traceUpdate(self.trace1, paramtable)]
-	[trace.traceUpdate(self.trace2, paramtable)]
-	self:updateLPCond()
+	return terra(self: &InterpolationTrace)
+		[trace.traceUpdate(self.trace1, paramtable)]
+		[trace.traceUpdate(self.trace2, paramtable)]
+		self:updateLPCond()
+	end
 end)
 
 m.addConstructors(InterpolationTrace)
@@ -209,8 +213,8 @@ end
 
 terra LARJKernel:next(currTrace: &BaseTrace)
 	self.jumpProposalsMade = self.jumpProposalsMade + 1
-	var oldStructTrace = currTrace:deepcopy()
-	var newStructTrace = currTrace:deepcopy()
+	var oldStructTrace = [&GlobalTrace](currTrace:deepcopy())
+	var newStructTrace = [&GlobalTrace](currTrace:deepcopy())
 
 	-- Randomly change a structural variable
 	var freevars = newStructTrace:freeVars(true, false)
@@ -234,14 +238,27 @@ terra LARJKernel:next(currTrace: &BaseTrace)
 				annealingLpRatio = annealingLpRatio - lerpTrace.logprob
 			end
 		end
-		oldStructTrace = lerpTrace.trace1:deepcopy()
-		newStructTrace = lerpTrace.trace2:deepcopy()
+		oldStructTrace = [&GlobalTrace](lerpTrace.trace1:deepcopy())
+		newStructTrace = [&GlobalTrace](lerpTrace.trace2:deepcopy())
 		m.delete(lerpTrace)
 	end
 
 	-- Finalize accept/reject decision
-	
+	rvsPropLP = oldStructTrace:lpDiff(newStructTrace) - C.log(newNumStructVars)
+	var acceptanceProb = newStructTrace.logprob - currTrace.logprob + rvsPropLP - fwdPropLP + annealingLpRatio
+	var accepted = newStructTrace.conditionsSatisfied and C.log(rand.random()) < acceptanceProb
+	m.delete(oldStructTrace)
+	if accepted then
+		self.jumpProposalsAccepted = self.jumpProposalsAccepted + 1
+		m.delete(currTrace)
+		return newStructTrace
+	else
+		m.delete(newStructTrace)
+		return currTrace
+	end
 end
+
+terra LARJKernel:name() return LARJKernel.name end
 
 terra LARJKernel:stats()
 	C.printf("==JUMP==\nAcceptance ratio: %g (%u/%u)\n",
@@ -254,20 +271,26 @@ terra LARJKernel:stats()
 	end
 end
 
+m.addConstructors(LARJKernel)
+
 
 
 -- Convenience method for generating LARJ Multi-kernels (i.e. kernels that sometimes
---  do LARJ steps and other times do diffusion steps)
-local function LARJ(innerKernelName, innerKernelGen)
+--    do LARJ steps and other times do diffusion steps)
+-- Can specify separate generators for diffusion and annealing kernels, but defaults to
+--    using the same kernel for both if only one is specified.
+local function LARJ(diffKernelGen, annealKernelGen)
+	assert(diffKernelGen)
+	annealKernelGen = annealKernelGen or diffusionKernel
 	return inf.makeKernelGenerator(
 		terra(jumpFreq: double, intervals: uint, stepsPerInterval: uint)
-			var diffKernel = innerKernelGen()
-			var jumpKernel = LARJKernel.heapAlloc(innerKernelGen(), intervals, stepsPerInterval)
+			var diffKernel = diffKernelGen()
+			var jumpKernel = LARJKernel.heapAlloc(annealKernelGen(), intervals, stepsPerInterval)
 			var kernels = Vector.fromItems(diffKernel, jumpKernel)
-			var names = Vector.fromItems(innerKernelName, "LARJ")
 			var freqs = Vector.fromItems(1.0-jumpFreq, jumpFreq)
-			return inf.MultiKernel.heapAlloc(kernels, names, freqs)
-		end)
+			return inf.MultiKernel.heapAlloc(kernels, freqs)
+		end,
+		{jumpFreq = 0.1, intervals = 0, stepsPerInterval = 1})
 end
 
 

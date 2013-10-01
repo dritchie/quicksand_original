@@ -281,6 +281,23 @@ terra GlobalTrace:lookupVariableNonStructural()
 	return v
 end
 
+-- Total lp from variables this trace has that other does not
+terra GlobalTrace:lpDiff(other: &GlobalTrace)
+	var total = 0.0
+	var it = self.vars:iterator()
+	util.foreach(it, [quote
+		var k, v1 = it:keyvalPointer()
+		var v2 = other.vars:getPointer(@k)
+		var n1 = v1.size
+		var n2 = 0
+		if v2 ~= nil then n2 = v2.size end
+		for i=n2,n1 do
+			total = total + v1:get(i).logprob
+		end
+	end])
+	return total
+end
+
 terra GlobalTrace:varListPointer() : &Vector(&RandVar)
 	return &self.varlist
 end
