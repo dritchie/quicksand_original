@@ -45,7 +45,7 @@ local function genbenchmarks()
 			return terra()
 				var counter = 0
 				for i=0,5000 do
-					counter = counter + [flip(0.5, {structural=maybenot()})]
+					counter = counter + int([flip(0.5, {structural=maybenot()})])
 				end
 				return counter
 			end
