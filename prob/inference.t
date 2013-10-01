@@ -133,9 +133,46 @@ m.addConstructors(RandomWalkKernel)
 -- Convenience method for making RandomWalkKernels
 local RandomWalk = makeKernelGenerator(
 	terra()
-		return RandomWalkKernel.stackAlloc(true, true)
+		return RandomWalkKernel.heapAlloc(true, true)
 	end,
 	{})
+
+
+
+-- MCMC Kernel that probabilistically selects between multiple sub-kernels
+local struct MultiKernel
+{
+	kernels: Vector(MCMCKernel),
+	names: Vector(rawstring),
+	freqs: Vector(double)
+}
+
+-- NOTE: Assumes ownership of arguments (read: does not copy)
+terra MultiKernel:__construct(kernels: Vector(MCMCKernel), names: Vector(rawstring), freqs: Vector(double))
+	self.kernels = kernels
+	self.names = names
+	self.freqs = freqs
+end
+
+terra MultiKernel:__destruct()
+	m.destruct(self.kernels)
+	m.destruct(self.names)
+	m.destruct(self.freqs)
+end
+
+terra MultiKernel:next(currTrace: &BaseTrace)
+	var whichKernel = [rand.multinomial_sample(double)](self.freqs)
+	return self.kernels:get(whichKernel):next(currTrace)
+end
+
+terra MultiKernel:stats()
+	for i=0,self.kernels.size do
+		C.printf("------ Kernel %d (%s) ------\n", i+1, self.names:get(i))
+		self.kernels:get(i):stats()
+	end
+end
+
+m.addConstructors(MultiKernel)
 
 
 
@@ -205,7 +242,7 @@ local function mcmc(computation, kernelgen, params)
 			C.printf("\n")
 			kernel:stats()
 		end
-		m.destruct(kernel)
+		m.delete(kernel)
 		return samps
 	end
 	return `chain()
@@ -268,6 +305,7 @@ return
 {
 	makeKernelGenerator = makeKernelGenerator,
 	RandomWalk = RandomWalk,
+	MultiKernel = MultiKernel,
 	mcmc = mcmc,
 	rejectionSample = rejectionSample,
 	mean = mean,

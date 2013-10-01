@@ -55,6 +55,11 @@ terra RandVar:proposeNewValue() : {double, double}
 end
 inheritance.virtual(RandVar, "proposeNewValue")
 
+terra RandVar:setValue(valptr: &opaque) : {}
+	notImplementedError("setValue", "RandVar")
+end
+inheritance.virtual(RandVar, "setValue")
+
 
 
 -- Functions to inspect the value type of any random variable

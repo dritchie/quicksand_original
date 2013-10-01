@@ -206,6 +206,14 @@ local RandVarFromFunctions = templatize(function(sample, logprobfn, propose, ...
 	end
 	inheritance.virtual(RandVarFromFunctionsT, "proposeNewValue")
 
+	-- Set the value directly
+	terra RandVarFromFunctionsT:setValue(valptr: &opaque) : {}
+		m.destruct(self.value)
+		self.value = m.copy(@([&ValType](valptr)))
+		self:updateLogprob()
+	end
+	inheritance.virtual(RandVarFromFunctionsT, "setValue")
+
 	m.addConstructors(RandVarFromFunctionsT)
 	return RandVarFromFunctionsT
 end)

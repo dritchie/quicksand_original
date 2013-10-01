@@ -337,7 +337,7 @@ end
 
 
 -- This is the normal, single trace that most inference uses.
---    It has to specialize on the type of function that it's tracking.
+--    It has to specialize on the function that it's tracking.
 local RandExecTrace = templatize(function(computation)
 
 	-- Get the type of this computation (requires us to generate the default,
@@ -569,8 +569,10 @@ return
 {
 	pfn = pfn,
 	traceUpdate = traceUpdate,
+	fillTraceUpdateVtable = fillTraceUpdateVtable,
 	newTrace = newTrace,
 	BaseTrace = BaseTrace,
+	GlobalTrace = GlobalTrace,
 	RandExecTrace = RandExecTrace,
 	lookupVariableValue = lookupVariableValue,
 	factor = factor,
