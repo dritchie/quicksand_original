@@ -291,8 +291,8 @@ local function LARJ(diffKernelGen, annealKernelGen)
 	annealKernelGen = annealKernelGen or diffKernelGen
 	return inf.makeKernelGenerator(
 		terra(jumpFreq: double, intervals: uint, stepsPerInterval: uint)
-			var diffKernel = diffKernelGen()
-			var jumpKernel = LARJKernel.heapAlloc(annealKernelGen(), intervals, stepsPerInterval)
+			var diffKernel = [diffKernelGen()]
+			var jumpKernel = LARJKernel.heapAlloc([annealKernelGen()], intervals, stepsPerInterval)
 			var kernels = [Vector(MCMCKernel)].stackAlloc():fill(diffKernel, jumpKernel)
 			var freqs = Vector.fromItems(1.0-jumpFreq, jumpFreq)
 			return inf.MultiKernel.heapAlloc(kernels, freqs)

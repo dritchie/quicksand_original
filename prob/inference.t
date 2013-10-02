@@ -30,7 +30,7 @@ local MCMCKernel = iface.create {
 --         and returns a kernel.
 --    * defaults: A table of default argument values.
 -- This returns a (Lua) function which will take a table of
---    named parameters and return a no-arg macro which generates
+--    named parameters and return a no-arg function which generates
 --    the desired kernel.
 -- The names used in the parameter table must match the names
 --    used in the definition of kernelfn.
@@ -53,7 +53,7 @@ local function makeKernelGenerator(kernelfn, defaults)
 			end
 			table.insert(args, arg)
 		end
-		return macro(function() return `kernelfn([args]) end)
+		return function() return `kernelfn([args]) end
 	end
 end
 
@@ -227,7 +227,7 @@ local function mcmc(computation, kernelgen, params)
 	local CompType = comp:getdefinitions()[1]:gettype()
 	local RetValType = CompType.returns[1]
 	local terra chain()
-		var kernel = kernelgen()
+		var kernel = [kernelgen()]
 		var samps = [Vector(Sample(RetValType))].stackAlloc()
 		var currTrace : &BaseTrace = [trace.newTrace(computation)]
 		for i=0,iters do
