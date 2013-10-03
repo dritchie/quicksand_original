@@ -1,15 +1,12 @@
 local templatize = terralib.require("templatize")
 local util = terralib.require("util")
 
-
 local currindex = 1
-local values = {}
 local defaults = {}
 local indices = {}
 local names = {}
 
 local function addParam(name, defaultValue)
-	values[name] = defaultValue
 	defaults[name] = defaultValue
 	indices[name] = currindex
 	currindex = currindex + 1
