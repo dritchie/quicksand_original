@@ -9,7 +9,7 @@ local templatize = terralib.require("templatize")
 local inheritance = terralib.require("inheritance")
 local m = terralib.require("mem")
 local rand = terralib.require("prob.random")
-local specialize = terralib.require("prob.specialize")
+local spec = terralib.require("prob.specialize")
 
 local C = terralib.includecstring [[
 #include <stdio.h>
@@ -26,7 +26,7 @@ end
 initGlobals()
 
 -- For debugging
-local terra printCallStack()
+local terra printCallsiteStack()
 	for i=0,callsiteStack.size do
 		C.printf("%d,", callsiteStack:get(i))
 	end
@@ -40,7 +40,6 @@ end
 local function isValidProbFn(fn)
 	-- Prerequisites: fn must be a terra function, and if it is overloaded,
 	-- all overloads must have the same number of return types
-	assert(terralib.isfunction(fn))
 	local s, t = fn:getdefinitions()[1]:peektype()
 	local numrets = #t.returns
 	for i=2,#fn:getdefinitions() do
@@ -49,68 +48,70 @@ local function isValidProbFn(fn)
 	end
 end
 local nextid = 0
-local function pfn(fn)
-	local data = { definition = fn }
-	local ret = macro(function(...)
-		local args = {}
-		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
-		-- If we're compiling a specialization with no structure change, then
-		-- don't do any address tracking
-		if not specialize.globalParam("structureChange") then
-			return `[data.definition]([args])
-		end
-		-- Every call gets a unique id
-		local myid = nextid
-		nextid = nextid + 1
-		local argintermediates = {}
-		for _,a in ipairs(args) do table.insert(argintermediates, symbol(a:gettype())) end
-		-- Does the function have an explicitly annotated return type?
-		local success, typ = data.definition:peektype()
-		-- If not, attempt to compile to determine the type
-		if not success then typ = data.definition:gettype(true) end
-		-- If this fails (asynchronous gettype returns nil), then we know we must have
-		--    a recursive dependency.
-		if not typ then
-			error("Recursive probabilistic functions must have explicitly annotated return types.")
-		else
-			-- Generate code!
-			isValidProbFn(data.definition)
-			local numrets = #typ.returns
-			if numrets == 0 then
-				return quote
-					var [argintermediates] = [args]
-					callsiteStack:push(myid)
-					[data.definition]([argintermediates])
-					callsiteStack:pop()
-				end
+local pfn = spec.specializable(function(...)
+	local structureChange = spec.paramFromList("structureChange", ...)
+	-- TODO: Also check "are we in inference, or just running the code?"
+	return function(fn)
+		local data = { definition = fn }
+		local ret = macro(function(...)
+			local args = {}
+			for i=1,select("#",...) do table.insert(args, (select(i,...))) end
+			-- If we're compiling a specialization with no structure change, then
+			-- don't do any address tracking
+			if not structureChange then
+				return `[data.definition]([args])
+			end
+			-- Every call gets a unique id
+			local myid = nextid
+			nextid = nextid + 1
+			local argintermediates = {}
+			for _,a in ipairs(args) do table.insert(argintermediates, symbol(a:gettype())) end
+			-- Does the function have an explicitly annotated return type?
+			local success, typ = data.definition:peektype()
+			-- If not, attempt to compile to determine the type
+			if not success then typ = data.definition:gettype(true) end
+			-- If this fails (asynchronous gettype returns nil), then we know we must have
+			--    a recursive dependency.
+			if not typ then
+				error("Recursive probabilistic functions must have explicitly annotated return types.")
 			else
-				local results = {}
-				for i=1,numrets do table.insert(results, symbol()) end
-				return quote
-					var [argintermediates] = [args]
-					callsiteStack:push(myid)
-					var [results] = [data.definition]([argintermediates])
-					callsiteStack:pop()
-				in
-					[results]
+				-- Generate code!
+				isValidProbFn(data.definition)
+				local numrets = #typ.returns
+				if numrets == 0 then
+					return quote
+						var [argintermediates] = [args]
+						callsiteStack:push(myid)
+						[data.definition]([argintermediates])
+						callsiteStack:pop()
+					end
+				else
+					local results = {}
+					for i=1,numrets do table.insert(results, symbol()) end
+					return quote
+						var [argintermediates] = [args]
+						callsiteStack:push(myid)
+						var [results] = [data.definition]([argintermediates])
+						callsiteStack:pop()
+					in
+						[results]
+					end
 				end
 			end
+		end)
+		-- Provide mechanisms for the function to be defined after it has been declared
+		-- This essentially provides a 'fix' operator for defining recursive functions.
+		ret.data = data
+		ret.define = function(self, fn)
+			self.data.definition = fn
 		end
-	end)
-	-- Provide mechanisms for the function to be defined after it has been declared
-	-- This essentially provides a 'fix' operator for defining recursive functions.
-	ret.data = data
-	ret.define = function(self, fn)
-		self.data.definition = fn
+		-- Allow this macro to masquerade as a Terra function
+		ret.getdefinitions = function(self) return self.data.definition:getdefinitions() end
+		ret.gettype = function(self) return self.data.definition:gettype() end
+		ret.peektype = function(self) return self.data.definition:peektype() end
+		return ret
 	end
-	-- We also need these wrapped functions to be able to expose their types, so that
-	--    other code gen routines that expect functions can work with them.
-	-- The simplest thing to do is just to forward the function definitions.
-	ret.getdefinitions = function(self)
-		return self.data.definition:getdefinitions()
-	end
-	return ret
-end
+end)
 
 
 
@@ -331,7 +332,7 @@ local globalTrace = global(&GlobalTrace, nil)
 local paramTables = {}
 local function traceUpdate(trace, paramTable)
 	paramTable = paramTable or {}
-	local id = specialize.paramTableID(paramTable)
+	local id = spec.paramTableID(paramTable)
 	local vtableindex = id-1
 	paramTables[id] = paramTable
 	return quote
@@ -344,7 +345,7 @@ local vmethods = {} -- Hold on to these to prevent GC
 local function fillTraceUpdateVtable(trace)
 	local Trace = terralib.typeof(trace).type
 	for _,pt in ipairs(paramTables) do
-		local specfn = Trace.traceUpdate(unpack(specialize.paramTableToList(pt)))
+		local specfn = Trace.traceUpdate(unpack(spec.paramTableToList(pt)))
 		table.insert(vmethods, specfn)
 		Vector(TraceUpdateFnPtr).methods.push(Trace.traceUpdateVtable:getpointer(), specfn:getpointer())
 	end
@@ -359,7 +360,7 @@ local RandExecTrace = templatize(function(computation)
 
 	-- Get the type of this computation (requires us to generate the default,
 	--  unspecialized version)
-	local comp = specialize.default(computation)
+	local comp = computation()
 	local success, CompType = comp:peektype()
 	if not success then CompType = comp:gettype() end
 
@@ -421,8 +422,8 @@ local RandExecTrace = templatize(function(computation)
 
 	-- Generate specialized 'traceUpdate' code
 	Trace.traceUpdate = templatize(function(...)
-		local structureChange = specialize.paramFromList("structureChange",...)
-		local speccomp = specialize.specializeWithParams(computation, ...)
+		local structureChange = spec.paramFromList("structureChange",...)
+		local speccomp = computation(spec.paramListToTable(...))
 		return terra(self: &Trace) : {}
 			-- Assume ownership of the global trace
 			var prevtrace = globalTrace
@@ -550,33 +551,41 @@ local function lookupVariableValueNonStructural(RandVarType, isstruct, iscond, c
 	end
 end
 
-local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, params)
-	if specialize.globalParam("structureChange") then
+local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, params, specParams)
+	local structureChange = spec.paramFromTable("structureChange", specParams)
+	if structureChange then
 		return lookupVariableValueStructural(RandVarType, isstruct, iscond, condVal, params)
 	else
 		return lookupVariableValueNonStructural(RandVarType, isstruct, iscond, condVal, params)
 	end
 end
 
-local factor = macro(function(num)
-	-- Do not generate any code if we're compiling a specialization
-	-- without factor evaluation.
-	if not specialize.globalParam("factorEval") then
-		return quote end
-	end
-	return quote
-		if globalTrace ~= nil then
-			globalTrace:factor(num)
+local factor = spec.specializable(function(...)
+	local factorEval = spec.paramFromList("factorEval", ...)
+	-- TODO: Also check "are we in inference?"
+	return macro(function(num)
+		-- Do not generate any code if we're compiling a specialization
+		-- without factor evaluation.
+		if not factorEval then
+			return quote end
 		end
-	end
+		return quote
+			if globalTrace ~= nil then
+				globalTrace:factor(num)
+			end
+		end
+	end)
 end)
 
-local condition = macro(function(pred)
-	return quote
-		if globalTrace ~= nil then
-			globalTrace:condition(pred)
+local condition = spec.specializable(function(...)
+	-- TODO : Check "are we in inference?"
+	return macro(function(pred)
+		return quote
+			if globalTrace ~= nil then
+				globalTrace:condition(pred)
+			end
 		end
-	end
+	end)
 end)
 
 
@@ -590,8 +599,11 @@ return
 	GlobalTrace = GlobalTrace,
 	RandExecTrace = RandExecTrace,
 	lookupVariableValue = lookupVariableValue,
-	factor = factor,
-	condition = condition
+	globals = {
+		pfn = pfn,
+		factor = factor,
+		condition = condition
+	}
 }
 
 

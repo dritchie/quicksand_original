@@ -12,7 +12,7 @@ local notImplementedError = erph.notImplementedError
 local typeToID = erph.typeToID
 
 local trace = terralib.require("prob.trace")
-local specialize = terralib.require("prob.specialize")
+local spec = terralib.require("prob.specialize")
 
 
 -- Every random variable has some value type; this intermediate
@@ -254,50 +254,74 @@ local function makeERP(sample, logprobfn, propose)
 
 	-- Generate an overloaded function which does the ERP call
 	-- Memoize results for different specializations
-	local function genErpFunction()
-		return specialize.specializeWithGlobals(function ()
-			local erpfn = nil
-			for _,d in ipairs(sample:getdefinitions()) do
-				local paramtypes = d:gettype().parameters
-				local rettype = d:gettype().returns[1]
-				local RandVarType = RandVarFromFunctions(sample, logprobfn, propose, unpack(paramtypes))
-				local params = {}
-				for _,t in ipairs(paramtypes) do table.insert(params, symbol(t)) end
-				-- First the conditioned version
-				local def = terra(isstruct: bool, condVal: rettype, [params])
-					return [trace.lookupVariableValue(RandVarType, isstruct, true, condVal, params)]
-				end
-				if not erpfn then erpfn = def else erpfn:adddefinition(def:getdefinitions()[1]) end
-				-- Then the unconditioned version
-				def = terra(isstruct: bool, [params])
-					return [trace.lookupVariableValue(RandVarType, isstruct, false, nil, params)]
-				end
-				erpfn:adddefinition(def:getdefinitions()[1])
+	local genErpFunction = spec.specializable(function(...)
+		local specParams = spec.paramListToTable(...)
+		local erpfn = nil
+		for _,d in ipairs(sample:getdefinitions()) do
+			local paramtypes = d:gettype().parameters
+			local rettype = d:gettype().returns[1]
+			local RandVarType = RandVarFromFunctions(sample, logprobfn, propose, unpack(paramtypes))
+			local params = {}
+			for _,t in ipairs(paramtypes) do table.insert(params, symbol(t)) end
+			-- First the conditioned version
+			local def = terra(isstruct: bool, condVal: rettype, [params])
+				return [trace.lookupVariableValue(RandVarType, isstruct, true, condVal, params, specParams)]
 			end
-			-- The ERP must push an ID to the callsite stack.
-			erpfn = trace.pfn(erpfn)
-			return erpfn
-		end)
+			if not erpfn then erpfn = def else erpfn:adddefinition(def:getdefinitions()[1]) end
+			-- Then the unconditioned version
+			def = terra(isstruct: bool, [params])
+				return [trace.lookupVariableValue(RandVarType, isstruct, false, nil, params, specParams)]
+			end
+			erpfn:adddefinition(def:getdefinitions()[1])
+		end
+		-- The ERP must push an ID to the callsite stack.
+		erpfn = trace.pfn(specParams)(erpfn)
+		return erpfn
+	end)
+
+	local function getisstruct(opstruct)
+		if opstruct then
+			local t = opstruct:gettype()
+			for _,e in ipairs(t.entries) do
+				if e.field == "structural"
+					then return `opstruct.structural
+				end
+			end
+		end
+		-- Defaulting to 'structural=true' is more sensible.
+		return true
+	end
+
+	local function getcondval(opstruct)
+		if opstruct then
+			local t = opstruct:gettype()
+			for _,e in ipairs(t.entries) do
+				if e.field == "constrainTo"
+					then return `opstruct.constrainTo
+				end
+			end
+		end
+		return nil
 	end
 
 	-- Finally, wrap everything in a function that extracts options from the
 	-- options table.
-	local ret = function(...)
-		local params = {}
-		for i=1,numparams do table.insert(params, (select(i,...))) end
-		local optable = (select(numparams+1, ...)) or {}
-		-- Defaulting to 'structural=true' is more sensible.
-		local isstruct = true
-		if optable["structural"] ~= nil then isstruct = optable["structural"] end
-		local condVal = optable["constrainTo"]
-		local erpfn = genErpFunction()
-		if condVal then
-			return `erpfn(isstruct, condVal, [params])
-		else
-			return `erpfn(isstruct, [params])
-		end
-	end
-	return ret
+	return spec.specializable(function(...)
+		local paramTable = spec.paramListToTable(...)
+		return macro(function(...)
+			local params = {}
+			for i=1,numparams do table.insert(params, (select(i,...))) end
+			local opstruct = (select(numparams+1, ...))
+			local isstruct = getisstruct(opstruct)
+			local condval = getcondval(opstruct)
+			local erpfn = genErpFunction(paramTable)
+			if condval then
+				return `erpfn(isstruct, condval, [params])
+			else
+				return `erpfn(isstruct, [params])
+			end
+		end)
+	end)
 end
 
 
@@ -336,21 +360,27 @@ makeERP(random.multinomial_sample(double),
 	    	return newval, fwdPropLP, rvsPropLP
 	    end)
 
-function erp.multinomialDraw(items, probs, optable)
-	optable = optable or {}
-	return `items:get([erp.multinomial(probs, optable)])
-end
+erp.multinomialDraw = spec.specializable(function(...)
+	local paramTable = spec.paramListToTable(...)
+	return macro(function(items, probs, opstruct)
+		opstruct = opstruct or `{}
+		return `items:get([erp.multinomial(paramTable)](probs, opstruct))
+	end)
+end)
 
-function erp.uniformDraw(items, optable)
-	optable = optable or {}
-	return quote
-		var probs = [Vector(double)].stackAlloc(items.size, 1.0/items.size)
-		var result = items:get([erp.multinomial(probs, optable)])
-		m.destruct(probs)
-	in
-		result
-	end
-end
+erp.uniformDraw = spec.specializable(function(...)
+	local paramTable = spec.paramListToTable(...)
+	return macro(function(items, opstruct)
+		opstruct = opstruct or `{}
+		return quote
+			var probs = [Vector(double)].stackAlloc(items.size, 1.0/items.size)
+			var result = items:get([erp.multinomial(paramTable)](probs, opstruct))
+			m.destruct(probs)
+		in
+			result
+		end
+	end)
+end)
 
 erp.gaussian =
 makeERP(random.gaussian_sample(double),
@@ -385,7 +415,10 @@ makeERP(random.dirichlet_sample(double),
 
 
 
-return erp
+return
+{
+	globals = erp
+}
 
 
 

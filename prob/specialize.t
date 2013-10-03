@@ -1,4 +1,6 @@
 local templatize = terralib.require("templatize")
+local util = terralib.require("util")
+
 
 local currindex = 1
 local values = {}
@@ -42,26 +44,6 @@ local function paramListToTable(...)
 	return tbl
 end
 
--- Get current value of one of the globals
-local function globalParam(name)
-	return paramFromTable(name, values)
-end
-
-local specializeWithParams = templatize(function(computation, ...)
-	local currptable = values
-	values = paramListToTable(...)
-	local comp = computation()
-	values = currptable
-	return comp
-end)
-
-local function specializeWithGlobals(computation)
-	return specializeWithParams(computation, unpack(paramTableToList(values)))
-end
-
-local function default(computation)
-	return specializeWithParams(computation, unpack(paramTableToList({})))
-end
 
 -- Associating unique IDs with param tables
 local psetid = 1
@@ -71,6 +53,56 @@ local ParamSetID = templatize(function(...)
 end)
 local function paramTableID(paramTable)
 	return ParamSetID(unpack(paramTableToList(paramTable)))
+end
+
+-- Specializable computations
+local specializableMT = {
+	__call = function(self, paramTable)
+		paramTable = paramTable or {}
+		local plist = paramTableToList(paramTable)
+		return self.fn(unpack(plist))
+	end
+}
+local function specializable(fn)
+	local newobj = { fn = templatize(fn) }
+	setmetatable(newobj, specializableMT)
+	return newobj
+end
+local function isSpecializable(obj)
+	return getmetatable(obj) == specializableMT
+end
+
+-- The registry of global specializables, and methods for modifying
+-- the global environment according to specialization parameters
+local globalSpecs = {}
+local function registerGlobalSpecializable(name, obj)
+	globalSpecs[name] = obj
+end
+local function executeUnderGlobalSpecialization(thunk, paramTable)
+	local globalEnv = util.copytable(_G)
+	-- Set up global specialization environment
+	for name,obj in pairs(globalSpecs) do
+		rawset(_G, name, obj(paramTable))
+	end
+	-- Execute under new specialization environment
+	local ret = thunk()
+	-- Restore previous versions
+	for name,_ in pairs(globalSpecs) do
+		rawset(_G, name, globalEnv[name])
+	end
+	return ret
+end
+
+-- Specialization wrapper for overall probabilistic computation thunks
+local function specializablethunk(thunk)
+	local templatefn = templatize(function(...)
+		local paramTable = paramListToTable(...)
+		return executeUnderGlobalSpecialization(thunk, paramTable)
+	end)
+	return function(paramTable)
+		paramTable = paramTable or {}
+		return templatefn(unpack(paramTableToList(paramTable)))
+	end
 end
 
 ----------------------------------
@@ -99,11 +131,11 @@ return
 	paramFromTable = paramFromTable,
 	paramTableToList = paramTableToList,
 	paramListToTable = paramListToTable,
-	globalParam = globalParam,
 	paramTableID = paramTableID,
-	specializeWithParams = specializeWithParams,
-	specializeWithGlobals = specializeWithGlobals,
-	default = default
+	specializable = specializable,
+	specializablethunk = specializablethunk,
+	isSpecializable = isSpecializable,
+	registerGlobalSpecializable = registerGlobalSpecializable
 }
 
 

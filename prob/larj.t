@@ -303,7 +303,7 @@ end
 
 return
 {
-	LARJ = LARJ
+	globals = { LARJ = LARJ }
 }
 
 

@@ -156,7 +156,7 @@ end
 
 return
 {
-	mem = mem
+	globals = { mem = mem }
 }
 
 

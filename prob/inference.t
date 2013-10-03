@@ -1,5 +1,5 @@
 local trace = terralib.require("prob.trace")
-local specialize = terralib.require("prob.specialize")
+local spec = terralib.require("prob.specialize")
 local BaseTrace = trace.BaseTrace
 local RandExecTrace = trace.RandExecTrace
 local TraceWithRetVal = trace.TraceWithRetVal
@@ -219,11 +219,12 @@ end)
 -- returns a Vector of samples, where a sample is a
 --    struct with a 'value' field and a 'logprob' field
 local function mcmc(computation, kernelgen, params)
+	computation = spec.specializablethunk(computation)
 	local lag = params.lag or 1
 	local iters = params.numsamps * lag
 	local verbose = params.verbose or false
 	local burnin = params.burnin or 0
-	local comp = specialize.default(computation)
+	local comp = computation()
 	local CompType = comp:getdefinitions()[1]:gettype()
 	local RetValType = CompType.returns[1]
 	local terra chain()
@@ -294,6 +295,7 @@ end)
 
 -- Draw a sample from a computation via rejection
 local function rejectionSample(computation)
+	computation = spec.specializablethunk(computation)
 	return quote
 		var tr = [trace.newTrace(computation)]
 		var retval = tr.returnValue
@@ -308,13 +310,15 @@ return
 {
 	MCMCKernel = MCMCKernel,
 	makeKernelGenerator = makeKernelGenerator,
-	RandomWalk = RandomWalk,
 	MultiKernel = MultiKernel,
-	mcmc = mcmc,
-	rejectionSample = rejectionSample,
-	mean = mean,
-	expectation = expectation,
-	MAP = MAP
+	globals = {
+		RandomWalk = RandomWalk,
+		mcmc = mcmc,
+		rejectionSample = rejectionSample,
+		mean = mean,
+		expectation = expectation,
+		MAP = MAP
+	}
 }
 
 
