@@ -109,6 +109,7 @@ end
 -- The actual parameters
 addParam("structureChange", true)
 addParam("factorEval", true)
+addParam("doingInference", false)
 
 ----------------------------------
 

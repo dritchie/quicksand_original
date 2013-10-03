@@ -50,15 +50,15 @@ end
 local nextid = 0
 local pfn = spec.specializable(function(...)
 	local structureChange = spec.paramFromList("structureChange", ...)
-	-- TODO: Also check "are we in inference, or just running the code?"
+	local doingInference = spec.paramFromList("doingInference", ...)
 	return function(fn)
 		local data = { definition = fn }
 		local ret = macro(function(...)
 			local args = {}
 			for i=1,select("#",...) do table.insert(args, (select(i,...))) end
-			-- If we're compiling a specialization with no structure change, then
-			-- don't do any address tracking
-			if not structureChange then
+			-- If we're compiling a specialization with no structure change, or if we're running
+			--    the code outside of an inference engine, then don't do any address tracking
+			if not doingInference or not structureChange then
 				return `[data.definition]([args])
 			end
 			-- Every call gets a unique id
@@ -332,6 +332,7 @@ local globalTrace = global(&GlobalTrace, nil)
 local paramTables = {}
 local function traceUpdate(trace, paramTable)
 	paramTable = paramTable or {}
+	paramTable.doingInference = true
 	local id = spec.paramTableID(paramTable)
 	local vtableindex = id-1
 	paramTables[id] = paramTable
@@ -562,11 +563,13 @@ end
 
 local factor = spec.specializable(function(...)
 	local factorEval = spec.paramFromList("factorEval", ...)
+	local doingInference = spec.paramFromList("doingInference", ...)
 	-- TODO: Also check "are we in inference?"
 	return macro(function(num)
 		-- Do not generate any code if we're compiling a specialization
-		-- without factor evaluation.
-		if not factorEval then
+		--    without factor evaluation, or if we're running the code outside of
+		--    an inference engine
+		if not doingInference or not factorEval then
 			return quote end
 		end
 		return quote
@@ -578,8 +581,11 @@ local factor = spec.specializable(function(...)
 end)
 
 local condition = spec.specializable(function(...)
-	-- TODO : Check "are we in inference?"
+	local doingInference = spec.paramFromList("doingInference", ...)
 	return macro(function(pred)
+		if not doingInference then
+			return quote end
+		end
 		return quote
 			if globalTrace ~= nil then
 				globalTrace:condition(pred)
