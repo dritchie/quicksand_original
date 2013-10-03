@@ -44,6 +44,16 @@ terra InterpolationRandVar:__copy(other: &InterpolationRandVar)
 	self.rv2 = other.rv2
 end
 
+terra InterpolationRandVar:__destruct() : {}
+	-- Does nothing
+	-- I thought about putting this stub in RandVar and just not having a
+	--    destructor here, but that's a dangerous pattern: if you forget to
+	--    mark a destructor as virtual and there's a stub in the base class,
+	--    then the program call the stub instead of the derived class
+	--    destructor, and you'll never know this is happening.
+end
+inheritance.virtual(InterpolationRandVar, "__destruct")
+
 terra InterpolationRandVar:valueTypeID() : uint64
 	return self.rv1:valueTypeID()
 end
@@ -154,13 +164,14 @@ terra InterpolationTrace:__copy(trace: &InterpolationTrace)
 	self:buildVarList()
 end
 
-terra InterpolationTrace:__destruct()
+terra InterpolationTrace:__destruct() : {}
 	self:clearVarList()
 	m.delete(self.trace1)
 	m.delete(self.trace2)
 	m.destruct(self.varlist)
 	m.destruct(self.interpvars)
 end
+inheritance.virtual(InterpolationTrace, "__destruct")
 
 terra InterpolationTrace:deepcopy() : &BaseTrace
 	var t = m.new(InterpolationTrace)

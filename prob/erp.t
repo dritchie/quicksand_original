@@ -34,9 +34,10 @@ local RandVarWithVal = templatize(function(ValType)
 		self.value = m.copy(othervar.value)
 	end
 
-	terra RandVarWithValT:__destruct()
+	terra RandVarWithValT:__destruct() : {}
 		m.destruct(self.value)
 	end
+	inheritance.virtual(RandVarWithValT, "__destruct")
 
 	local ValTypeID = typeToID(ValType)
 	terra RandVarWithValT:valueTypeID() : uint64
@@ -144,10 +145,11 @@ local RandVarFromFunctions = templatize(function(sample, logprobfn, propose, ...
 		end
 		return statements
 	end
-	terra RandVarFromFunctionsT:__destruct()
-		[RandVarWithVal(ValType)].__destruct(self)
+	terra RandVarFromFunctionsT:__destruct() : {}
+		[RandVarWithVal(ValType)].__rawdestruct(self)
 		[genDestructBlock(self)]
 	end
+	inheritance.virtual(RandVarFromFunctionsT, "__destruct")
 
 	-- Check if we need to update log probabilities do to changes in:
 	--    1) Parameters

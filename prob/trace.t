@@ -156,6 +156,11 @@ terra BaseTrace:varListPointer() : &Vector(&RandVar)
 end
 inheritance.virtual(BaseTrace, "varListPointer")
 
+terra BaseTrace:__destruct() : {}
+	notImplemented("__destruct", "BaseTrace")
+end
+inheritance.virtual(BaseTrace, "__destruct")
+
 local terra isSatisfyingFreeVar(v: &RandVar, structs: bool, nonstructs: bool)
 	return not v.isDirectlyConditioned and 
 		((structs and v.isStructural) or (nonstructs and not v.isStructural))
@@ -240,11 +245,12 @@ terra GlobalTrace:__copy(trace: &GlobalTrace)
 	m.destruct(old2new)
 end	
 
-terra GlobalTrace:__destruct()
+terra GlobalTrace:__destruct() : {}
 	m.destruct(self.vars)
 	m.destruct(self.varlist)
 	m.destruct(self.loopcounters)
 end
+inheritance.virtual(GlobalTrace, "__destruct")
 
 -- Algorithm for looking up the current variable when structure change is
 -- possible. Uses the global callsiteStack
@@ -416,10 +422,11 @@ local RandExecTrace = templatize(function(computation)
 	end
 	inheritance.virtual(Trace, "deepcopy")
 
-	terra Trace:__destruct()
-		GlobalTrace.__destruct(self)
+	terra Trace:__destruct() : {}
+		GlobalTrace.__rawdestruct(self)
 		m.destruct(self.returnValue)
 	end
+	inheritance.virtual(Trace, "__destruct")
 
 	-- Generate specialized 'traceUpdate' code
 	Trace.traceUpdate = templatize(function(...)

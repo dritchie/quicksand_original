@@ -8,6 +8,7 @@ local C = terralib.includecstring [[
 
 local terra notImplementedError(methodname: &int8, classname: &int8)
 	C.printf("Virtual function '%s' not implemented in class '%s'\n", methodname, classname)
+	terralib.traceback(nil)
 	C.exit(1)
 end
 
@@ -34,6 +35,11 @@ terra RandVar:__copy(othervar: &RandVar)
 	self.isActive = othervar.isActive
 	self.logprob = othervar.logprob
 end
+
+terra RandVar:__destruct() : {}
+	notImplementedError("__destruct", "RandVar")
+end
+inheritance.virtual(RandVar, "__destruct")
 
 terra RandVar:deepcopy() : &RandVar
 	notImplementedError("deepcopy", "RandVar")
