@@ -102,11 +102,6 @@ local function specializablethunk(thunk)
 	end
 end
 
-----------------------------------
--- The actual parameters
-addParam("structureChange", true)
-addParam("factorEval", true)
-addParam("doingInference", false)
 
 ----------------------------------
 
@@ -125,6 +120,7 @@ addParam("doingInference", false)
 
 return
 {
+	addParam = addParam,
 	paramFromList = paramFromList,
 	paramFromTable = paramFromTable,
 	paramTableToList = paramTableToList,

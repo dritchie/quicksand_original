@@ -1,5 +1,12 @@
 local spec = terralib.require("prob.specialize")
 
+----------------------------------
+-- Specialization parameters
+spec.addParam("structureChange", true)
+spec.addParam("factorEval", true)
+spec.addParam("doingInference", false)
+-----------------------------------
+
 -- Add all the 'global' exports from the module named 'name'
 --    to the global environment.
 local function processModule(name)
