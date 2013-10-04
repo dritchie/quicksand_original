@@ -1,5 +1,6 @@
 local inheritance = terralib.require("inheritance")
 local templatize = terralib.require("templatize")
+local virtualTemplate = terralib.require("vtemplate")
 local trace = terralib.require("prob.trace")
 local BaseTrace = trace.BaseTrace
 local GlobalTrace = trace.GlobalTrace
@@ -7,7 +8,7 @@ local m = terralib.require("mem")
 local erp = terralib.require("prob.erph")
 local RandVar = erp.RandVar
 local util = terralib.require("util")
-local specialize = terralib.require("prob.specialize")
+local spec = terralib.require("prob.specialize")
 local inf = terralib.require("prob.inference")
 local MCMCKernel = inf.MCMCKernel
 local Vector = terralib.require("vector")
@@ -90,12 +91,6 @@ local struct InterpolationTrace
 }
 inheritance.dynamicExtend(BaseTrace, InterpolationTrace)
 
--- Trace update stuff
-local TraceUpdateFnPtr = {&BaseTrace}->{}
-InterpolationTrace.traceUpdateVtable = global(Vector(TraceUpdateFnPtr))
-Vector(TraceUpdateFnPtr).methods.__construct(InterpolationTrace.traceUpdateVtable:getpointer())
-InterpolationTrace.traceUpdateVtableIsFilled = global(bool, false)
-
 terra InterpolationTrace:clearVarList()
 	for i=0,self.interpvars.size do
 		m.delete(self.interpvars:get(i))
@@ -140,12 +135,8 @@ end
 
 terra InterpolationTrace:__construct(t1: &GlobalTrace, t2: &GlobalTrace)
 	BaseTrace.__construct(self)
-	-- JIT traceUpdate functions, if we haven't compiled them yet
-	if not [InterpolationTrace.traceUpdateVtableIsFilled] then
-		trace.fillTraceUpdateVtable(self)	-- Calls back into Lua
-	end
-	-- Refer to the correct set of traceUpdate functions
-	self.traceUpdateVtable = &[InterpolationTrace.traceUpdateVtable]
+	-- IMPORTANT: initialize the virtual template vtable!
+	self:init_traceUpdateVtable()
 	-- Setup other stuff
 	self.trace1 = t1
 	self.trace2 = t2
@@ -156,7 +147,8 @@ end
 
 terra InterpolationTrace:__copy(trace: &InterpolationTrace)
 	BaseTrace.__copy(self, trace)
-	self.traceUpdateVtable = trace.traceUpdateVtable
+	-- IMPORTANT: initialize the virtual template vtable!
+	self:init_traceUpdateVtable()
 	self.trace1 = [&GlobalTrace](trace.trace1:deepcopy())
 	self.trace2 = [&GlobalTrace](trace.trace2:deepcopy())
 	self.alpha = trace.alpha
@@ -191,8 +183,8 @@ terra InterpolationTrace:setAlpha(alpha: double)
 end
 
 -- Generate specialized 'traceUpdate code'
-InterpolationTrace.traceUpdate = templatize(function(...)
-	local paramtable = specialize.paramListToTable(...)
+virtualTemplate(InterpolationTrace, "traceUpdate", {}->{}, function(...)
+	local paramtable = spec.paramListToTable(...)
 	return terra(self: &InterpolationTrace) : {}
 		var t1 = self.trace1
 		var t2 = self.trace2

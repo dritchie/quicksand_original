@@ -5,6 +5,7 @@ local iface = terralib.require("interface")
 local Vector = terralib.require("vector")
 local HashMap = terralib.require("hashmap")
 local templatize = terralib.require("templatize")
+local virtualTemplate = terralib.require("vtemplate")
 local inheritance = terralib.require("inheritance")
 local m = terralib.require("mem")
 local rand = terralib.require("prob.random")
@@ -128,8 +129,6 @@ local struct BaseTrace
 	oldlogprob: double,
 	conditionsSatisfied: bool,
 }
-local TraceUpdateFnPtr = {&BaseTrace}->{}
-BaseTrace.entries:insert({field="traceUpdateVtable", type=&Vector(TraceUpdateFnPtr)})
 
 terra BaseTrace:__construct()
 	self.logprob = 0.0
@@ -181,6 +180,16 @@ end
 
 m.addConstructors(BaseTrace)
 
+
+
+
+
+local traceUpdateImpl = virtualTemplate(BaseTrace, "traceUpdate", {}->{})
+local function traceUpdate(inst, paramTable)
+	paramTable = paramTable or {}
+	paramTable.doingInference = true
+	return `[traceUpdateImpl(inst, unpack(spec.paramTableToList(paramTable)))]()
+end
 
 
 
@@ -322,31 +331,6 @@ local globalTrace = global(&GlobalTrace, nil)
 
 
 
--- Specializing traceUpdate
-local paramTables = {}
-local function traceUpdate(trace, paramTable)
-	paramTable = paramTable or {}
-	paramTable.doingInference = true
-	local id = spec.paramTableID(paramTable)
-	local vtableindex = id-1
-	paramTables[id] = paramTable
-	return quote
-		var fnptr : TraceUpdateFnPtr = [trace].traceUpdateVtable:get(vtableindex)
-	in
-		fnptr([trace])
-	end
-end
-local vmethods = {} -- Hold on to these to prevent GC
-local function fillTraceUpdateVtable(trace)
-	local Trace = terralib.typeof(trace).type
-	for _,pt in ipairs(paramTables) do
-		local specfn = Trace.traceUpdate(unpack(spec.paramTableToList(pt)))
-		table.insert(vmethods, specfn)
-		Vector(TraceUpdateFnPtr).methods.push(Trace.traceUpdateVtable:getpointer(), specfn:getpointer())
-	end
-	Trace.traceUpdateVtableIsFilled:set(true)
-end
-
 
 
 -- This is the normal, single trace that most inference uses.
@@ -371,18 +355,10 @@ local RandExecTrace = templatize(function(computation)
 	}
 	inheritance.dynamicExtend(GlobalTrace, Trace)
 
-	Trace.traceUpdateVtable = global(Vector(TraceUpdateFnPtr))
-	Vector(TraceUpdateFnPtr).methods.__construct(Trace.traceUpdateVtable:getpointer())
-	Trace.traceUpdateVtableIsFilled = global(bool, false)
-
 	terra Trace:__construct()
 		GlobalTrace.__construct(self)
-		-- JIT the traceUpdate functions, if we haven't compiled them yet.
-		if not [Trace.traceUpdateVtableIsFilled] then
-			fillTraceUpdateVtable(self)	-- Call back into Lua
-		end
-		-- Allow this instance to refer to the correct set of traceUpdate functions.
-		self.traceUpdateVtable = &[Trace.traceUpdateVtable]
+		-- IMPORTANT: initialize the virtual template vtable!
+		self:init_traceUpdateVtable()
 		-- Initialize the trace with rejection sampling
 		while not self.conditionsSatisfied do
 			-- Clear out the existing vars
@@ -399,7 +375,8 @@ local RandExecTrace = templatize(function(computation)
 
 	terra Trace:__copy(trace: &Trace)
 		GlobalTrace.__copy(self, trace)
-		self.traceUpdateVtable = trace.traceUpdateVtable
+		-- IMPORTANT: initialize the virtual template vtable!
+		self:init_traceUpdateVtable()
 		self.returnValue = m.copy(trace.returnValue)
 	end
 
@@ -417,7 +394,7 @@ local RandExecTrace = templatize(function(computation)
 	inheritance.virtual(Trace, "__destruct")
 
 	-- Generate specialized 'traceUpdate' code
-	Trace.traceUpdate = templatize(function(...)
+	virtualTemplate(Trace, "traceUpdate", {}->{}, function(...)
 		local structureChange = spec.paramFromList("structureChange",...)
 		local speccomp = computation(spec.paramListToTable(...))
 		return terra(self: &Trace) : {}
@@ -488,7 +465,6 @@ local RandExecTrace = templatize(function(computation)
 
 	m.addConstructors(Trace)
 	return Trace
-
 end)
 
 
@@ -594,7 +570,6 @@ return
 {
 	pfn = pfn,
 	traceUpdate = traceUpdate,
-	fillTraceUpdateVtable = fillTraceUpdateVtable,
 	newTrace = newTrace,
 	BaseTrace = BaseTrace,
 	GlobalTrace = GlobalTrace,
