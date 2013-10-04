@@ -211,15 +211,16 @@ m.addConstructors(InterpolationTrace)
 -- The actual LARJ algorithm, as an MCMC kernel
 local struct LARJKernel
 {
-	diffusionKernel: MCMCKernel,
+	diffusionKernel: &MCMCKernel,
 	intervals: uint,
 	stepsPerInterval: uint,
 	jumpProposalsMade: uint,
 	jumpProposalsAccepted: uint,
 }
+inheritance.dynamicExtend(MCMCKernel, LARJKernel)
 
 -- NOTE: Assumes ownership of 'diffKernel'
-terra LARJKernel:__construct(diffKernel: MCMCKernel, intervals: uint, stepsPerInterval: uint)
+terra LARJKernel:__construct(diffKernel: &MCMCKernel, intervals: uint, stepsPerInterval: uint)
 	self.diffusionKernel = diffKernel
 	self.intervals = intervals
 	self.stepsPerInterval = stepsPerInterval
@@ -227,9 +228,10 @@ terra LARJKernel:__construct(diffKernel: MCMCKernel, intervals: uint, stepsPerIn
 	self.jumpProposalsAccepted = 0
 end
 
-terra LARJKernel:__destruct()
-	m.destruct(self.diffKernel)
+terra LARJKernel:__destruct() : {}
+	m.delete(self.diffusionKernel)
 end
+inheritance.virtual(LARJKernel, "__destruct")
 
 terra LARJKernel:next(currTrace: &BaseTrace)  : &BaseTrace
 	self.jumpProposalsMade = self.jumpProposalsMade + 1
@@ -277,10 +279,12 @@ terra LARJKernel:next(currTrace: &BaseTrace)  : &BaseTrace
 		return currTrace
 	end
 end
+inheritance.virtual(LARJKernel, "next")
 
-terra LARJKernel:name()return [LARJKernel.name] end
+terra LARJKernel:name() : rawstring return [LARJKernel.name] end
+inheritance.virtual(LARJKernel, "name")
 
-terra LARJKernel:stats()
+terra LARJKernel:stats() : {}
 	C.printf("==JUMP==\nAcceptance ratio: %g (%u/%u)\n",
 		[double](self.jumpProposalsAccepted)/self.jumpProposalsMade,
 		self.jumpProposalsAccepted,
@@ -288,6 +292,7 @@ terra LARJKernel:stats()
 	C.printf("==ANNEALING==\n")
 	self.diffusionKernel:stats()
 end
+inheritance.virtual(LARJKernel, "stats")
 
 m.addConstructors(LARJKernel)
 
@@ -304,7 +309,7 @@ local function LARJ(diffKernelGen, annealKernelGen)
 		terra(jumpFreq: double, intervals: uint, stepsPerInterval: uint)
 			var diffKernel = [diffKernelGen()]
 			var jumpKernel = LARJKernel.heapAlloc([annealKernelGen()], intervals, stepsPerInterval)
-			var kernels = [Vector(MCMCKernel)].stackAlloc():fill(diffKernel, jumpKernel)
+			var kernels = [Vector(&MCMCKernel)].stackAlloc():fill(diffKernel, jumpKernel)
 			var freqs = Vector.fromItems(1.0-jumpFreq, jumpFreq)
 			return inf.MultiKernel.heapAlloc(kernels, freqs)
 		end,

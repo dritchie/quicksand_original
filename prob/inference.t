@@ -3,7 +3,7 @@ local spec = terralib.require("prob.specialize")
 local BaseTrace = trace.BaseTrace
 local RandExecTrace = trace.RandExecTrace
 local TraceWithRetVal = trace.TraceWithRetVal
-local iface = terralib.require("interface")
+local inheritance = terralib.require("inheritance")
 local m = terralib.require("mem")
 local rand = terralib.require("prob.random")
 local templatize = terralib.require("templatize")
@@ -16,12 +16,13 @@ inline void flush() { fflush(stdout); }
 ]]
 
 
--- Interface for all MCMC kernels
-local MCMCKernel = iface.create {
-	next = {&BaseTrace} -> {&BaseTrace};
-	stats = {} -> {};
-	name = {} -> {rawstring};
-}
+-- Base class for all MCMC kernels
+local struct MCMCKernel {}
+inheritance.purevirtual(MCMCKernel, "__destruct", {}->{})
+inheritance.purevirtual(MCMCKernel, "next", {&BaseTrace}->{&BaseTrace})
+inheritance.purevirtual(MCMCKernel, "stats", {}->{})
+inheritance.purevirtual(MCMCKernel, "name", {}->{rawstring})
+
 
 
 -- Convenience method for generating new top-level MCMC kernels
@@ -66,6 +67,7 @@ local struct RandomWalkKernel
 	proposalsMade: uint,
 	proposalsAccepted: uint
 }
+inheritance.dynamicExtend(MCMCKernel, RandomWalkKernel)
 
 terra RandomWalkKernel:__construct(structs: bool, nonstructs: bool)
 	self.structs = structs
@@ -74,7 +76,10 @@ terra RandomWalkKernel:__construct(structs: bool, nonstructs: bool)
 	self.proposalsAccepted = 0
 end
 
-terra RandomWalkKernel:next(currTrace: &BaseTrace)
+terra RandomWalkKernel:__destruct() : {} end
+inheritance.virtual(RandomWalkKernel, "__destruct")
+
+terra RandomWalkKernel:next(currTrace: &BaseTrace) : &BaseTrace
 	self.proposalsMade = self.proposalsMade + 1
 	var nextTrace = currTrace
 	var numvars = currTrace:numFreeVars(self.structs, self.nonstructs)
@@ -120,15 +125,18 @@ terra RandomWalkKernel:next(currTrace: &BaseTrace)
 	end
 	return nextTrace
 end
+inheritance.virtual(RandomWalkKernel, "next")
 
-terra RandomWalkKernel:name() return [RandomWalkKernel.name] end
+terra RandomWalkKernel:name() : rawstring return [RandomWalkKernel.name] end
+inheritance.virtual(RandomWalkKernel, "name")
 
-terra RandomWalkKernel:stats()
+terra RandomWalkKernel:stats() : {}
 	C.printf("Acceptance ratio: %g (%u/%u)\n",
 		[double](self.proposalsAccepted)/self.proposalsMade,
 		self.proposalsAccepted,
 		self.proposalsMade)
 end
+inheritance.virtual(RandomWalkKernel, "stats")
 
 m.addConstructors(RandomWalkKernel)
 
@@ -146,34 +154,40 @@ local RandomWalk = makeKernelGenerator(
 -- MCMC Kernel that probabilistically selects between multiple sub-kernels
 local struct MultiKernel
 {
-	kernels: Vector(MCMCKernel),
+	kernels: Vector(&MCMCKernel),
 	freqs: Vector(double)
 }
+inheritance.dynamicExtend(MCMCKernel, MultiKernel)
 
 -- NOTE: Assumes ownership of arguments (read: does not copy)
-terra MultiKernel:__construct(kernels: Vector(MCMCKernel), freqs: Vector(double))
+terra MultiKernel:__construct(kernels: Vector(&MCMCKernel), freqs: Vector(double))
 	self.kernels = kernels
 	self.freqs = freqs
 end
 
-terra MultiKernel:__destruct()
+terra MultiKernel:__destruct() : {}
+	for i=0,self.kernels.size do m.delete(self.kernels:get(i)) end
 	m.destruct(self.kernels)
 	m.destruct(self.freqs)
 end
+inheritance.virtual(MultiKernel, "__destruct")
 
-terra MultiKernel:next(currTrace: &BaseTrace)
+terra MultiKernel:next(currTrace: &BaseTrace) : &BaseTrace
 	var whichKernel = [rand.multinomial_sample(double)](self.freqs)
 	return self.kernels:get(whichKernel):next(currTrace)
 end
+inheritance.virtual(MultiKernel, "next")
 
-terra MultiKernel:name() return [MultiKernel.name] end
+terra MultiKernel:name() : rawstring return [MultiKernel.name] end
+inheritance.virtual(MultiKernel, "name")
 
-terra MultiKernel:stats()
+terra MultiKernel:stats() : {}
 	for i=0,self.kernels.size do
 		C.printf("------ Kernel %d (%s) ------\n", i+1, self.kernels:get(i):name())
 		self.kernels:get(i):stats()
 	end
 end
+inheritance.virtual(MultiKernel, "stats")
 
 m.addConstructors(MultiKernel)
 
