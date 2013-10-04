@@ -1,17 +1,6 @@
 local inheritance = terralib.require("inheritance")
 local templatize = terralib.require("templatize")
 
-local C = terralib.includecstring [[
-#include <stdio.h>
-#include <stdlib.h>
-]]
-
-local terra notImplementedError(methodname: &int8, classname: &int8)
-	C.printf("Virtual function '%s' not implemented in class '%s'\n", methodname, classname)
-	terralib.traceback(nil)
-	C.exit(1)
-end
-
 
 -- Base class for all random variables
 local struct RandVar
@@ -36,36 +25,12 @@ terra RandVar:__copy(othervar: &RandVar)
 	self.logprob = othervar.logprob
 end
 
-terra RandVar:__destruct() : {}
-	notImplementedError("__destruct", "RandVar")
-end
-inheritance.virtual(RandVar, "__destruct")
-
-terra RandVar:deepcopy() : &RandVar
-	notImplementedError("deepcopy", "RandVar")
-end
-inheritance.virtual(RandVar, "deepcopy")
-
-terra RandVar:valueTypeID() : uint64
-	notImplementedError("valueTypeID", "RandVar")
-end
-inheritance.virtual(RandVar, "valueTypeID")
-
-terra RandVar:pointerToValue() : &opaque
-	notImplementedError("pointerToValue", "RandVar")
-end
-inheritance.virtual(RandVar, "pointerToValue")
-
-terra RandVar:proposeNewValue() : {double, double}
-	notImplementedError("proposeNewValue", "RandVar")
-end
-inheritance.virtual(RandVar, "proposeNewValue")
-
-terra RandVar:setValue(valptr: &opaque) : {}
-	notImplementedError("setValue", "RandVar")
-end
-inheritance.virtual(RandVar, "setValue")
-
+inheritance.purevirtual(RandVar, "__destruct", {}->{})
+inheritance.purevirtual(RandVar, "deepcopy", {}->{&RandVar})
+inheritance.purevirtual(RandVar, "valueTypeID", {}->{uint64})
+inheritance.purevirtual(RandVar, "pointerToValue", {}->{&opaque})
+inheritance.purevirtual(RandVar, "proposeNewValue", {}->{double,double})
+inheritance.purevirtual(RandVar, "setValue", {&opaque}->{})
 
 
 -- Functions to inspect the value type of any random variable
@@ -96,7 +61,6 @@ end)
 return
 {
 	RandVar = RandVar,
-	notImplementedError = notImplementedError,
 	typeToID = typeToID,
 	valueIs = valueIs,
 	valueAs = valueAs

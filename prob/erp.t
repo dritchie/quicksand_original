@@ -8,7 +8,6 @@ local util = terralib.require("util")
 
 local erph = terralib.require("prob.erph")
 local RandVar = erph.RandVar
-local notImplementedError = erph.notImplementedError
 local typeToID = erph.typeToID
 
 local trace = terralib.require("prob.trace")

@@ -1,6 +1,5 @@
 local erp = terralib.require("prob.erph")
 local RandVar = erp.RandVar
-local notImplemented = erp.notImplementedError
 local util = terralib.require("util")
 local iface = terralib.require("interface")
 local Vector = terralib.require("vector")
@@ -146,20 +145,9 @@ terra BaseTrace:__copy(trace: &BaseTrace)
 	self.conditionsSatisfied = trace.conditionsSatisfied
 end
 
-terra BaseTrace:deepcopy() : &BaseTrace
-	notImplemented("deepcopy", "BaseTrace")
-end
-inheritance.virtual(BaseTrace, "deepcopy")
-
-terra BaseTrace:varListPointer() : &Vector(&RandVar)
-	notImplemented("varListPointer", "BaseTrace")
-end
-inheritance.virtual(BaseTrace, "varListPointer")
-
-terra BaseTrace:__destruct() : {}
-	notImplemented("__destruct", "BaseTrace")
-end
-inheritance.virtual(BaseTrace, "__destruct")
+inheritance.purevirtual(BaseTrace, "__destruct", {}->{})
+inheritance.purevirtual(BaseTrace, "deepcopy", {} -> {&BaseTrace})
+inheritance.purevirtual(BaseTrace, "varListPointer", {}->{&Vector(&RandVar)})
 
 local terra isSatisfyingFreeVar(v: &RandVar, structs: bool, nonstructs: bool)
 	return not v.isDirectlyConditioned and 
