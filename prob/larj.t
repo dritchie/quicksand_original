@@ -183,7 +183,7 @@ terra InterpolationTrace:setAlpha(alpha: double)
 end
 
 -- Generate specialized 'traceUpdate code'
-virtualTemplate(InterpolationTrace, "traceUpdate", {}->{}, function(...)
+virtualTemplate(InterpolationTrace, "traceUpdate", function(...) return {}->{} end, function(...)
 	local paramtable = spec.paramListToTable(...)
 	return terra(self: &InterpolationTrace) : {}
 		var t1 = self.trace1

@@ -184,7 +184,7 @@ m.addConstructors(BaseTrace)
 
 
 
-local traceUpdateImpl = virtualTemplate(BaseTrace, "traceUpdate", {}->{})
+local traceUpdateImpl = virtualTemplate(BaseTrace, "traceUpdate", function(...) return {}->{} end)
 local function traceUpdate(inst, paramTable)
 	paramTable = paramTable or {}
 	paramTable.doingInference = true
@@ -394,7 +394,7 @@ local RandExecTrace = templatize(function(computation)
 	inheritance.virtual(Trace, "__destruct")
 
 	-- Generate specialized 'traceUpdate' code
-	virtualTemplate(Trace, "traceUpdate", {}->{}, function(...)
+	virtualTemplate(Trace, "traceUpdate", function(...) return {}->{} end, function(...)
 		local structureChange = spec.paramFromList("structureChange",...)
 		local speccomp = computation(spec.paramListToTable(...))
 		return terra(self: &Trace) : {}
