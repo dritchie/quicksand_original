@@ -3,6 +3,7 @@ local templatize = terralib.require("templatize")
 local virtualTemplate = terralib.require("vtemplate")
 local trace = terralib.require("prob.trace")
 local BaseTrace = trace.BaseTrace
+local BaseTraceD = BaseTrace(double)
 local GlobalTrace = trace.GlobalTrace
 local m = terralib.require("mem")
 local erp = terralib.require("prob.erph")
@@ -25,54 +26,59 @@ local C = terralib.includecstring [[
 -- These are used as abstractions for simultaneously referring to both
 --    instances of the same variable in two different traces through
 --    a program.
-local struct InterpolationRandVar
-{
-	rv1: &RandVar,
-	rv2: &RandVar
-}
-inheritance.dynamicExtend(RandVar, InterpolationRandVar)
+local InterpolationRandVar = templatize(function(ProbType)
+	local RVar = RandVar(ProbType)
+	local struct InterpolationRandVarT
+	{
+		rv1: &RVar,
+		rv2: &RVar
+	}
+	inheritance.dynamicExtend(RVar, InterpolationRandVarT)
 
-terra InterpolationRandVar:__construct(rv1: &RandVar, rv2: &RandVar)
-	RandVar.__construct(self, rv1.isStructural, rv2.isDirectlyConditioned)
-	self.logprob = rv1.logprob
-	self.rv1 = rv1
-	self.rv2 = rv2
-end
+	terra InterpolationRandVarT:__construct(rv1: &RVar, rv2: &RVar)
+		RVar.__construct(self, rv1.isStructural, rv2.isDirectlyConditioned)
+		self.logprob = rv1.logprob
+		self.rv1 = rv1
+		self.rv2 = rv2
+	end
 
-terra InterpolationRandVar:__copy(other: &InterpolationRandVar)
-	RandVar.__copy(self, other)
-	self.rv1 = other.rv1
-	self.rv2 = other.rv2
-end
+	-- -- AFAIK, this is an unnecessary operation...
+	-- terra InterpolationRandVarT:__copy(other: &InterpolationRandVarT)
+	-- 	RVar.__copy(self, other)
+	-- 	self.rv1 = other.rv1
+	-- 	self.rv2 = other.rv2
+	-- end
 
-terra InterpolationRandVar:__destruct() : {}
-	-- Does nothing
-	-- I thought about putting this stub in RandVar and just not having a
-	--    destructor here, but that's a dangerous pattern: if you forget to
-	--    mark a destructor as virtual and there's a stub in the base class,
-	--    then the program call the stub instead of the derived class
-	--    destructor, and you'll never know this is happening.
-end
-inheritance.virtual(InterpolationRandVar, "__destruct")
+	terra InterpolationRandVarT:__destruct() : {}
+		-- Does nothing
+		-- I thought about putting this stub in RandVar and just not having a
+		--    destructor here, but that's a dangerous pattern: if you forget to
+		--    mark a destructor as virtual and there's a stub in the base class,
+		--    then the program call the stub instead of the derived class
+		--    destructor, and you'll never know this is happening.
+	end
+	inheritance.virtual(InterpolationRandVarT, "__destruct")
 
-terra InterpolationRandVar:valueTypeID() : uint64
-	return self.rv1:valueTypeID()
-end
-inheritance.virtual(InterpolationRandVar, "valueTypeID")
+	terra InterpolationRandVarT:valueTypeID() : uint64
+		return self.rv1:valueTypeID()
+	end
+	inheritance.virtual(InterpolationRandVarT, "valueTypeID")
 
-terra InterpolationRandVar:pointerToValue() : &opaque
-	return self.rv1:pointerToValue()
-end
-inheritance.virtual(InterpolationRandVar, "pointerToValue")
+	terra InterpolationRandVarT:pointerToValue() : &opaque
+		return self.rv1:pointerToValue()
+	end
+	inheritance.virtual(InterpolationRandVarT, "pointerToValue")
 
-terra InterpolationRandVar:proposeNewValue() : {double, double}
-	var fwdPropLP, rvsPropLP = self.rv1:proposeNewValue()
-	self.rv2:setValue(self.rv1:pointerToValue())
-	self.logprob = self.rv1.logprob
-end
-inheritance.virtual(InterpolationRandVar, "proposeNewValue")
+	terra InterpolationRandVarT:proposeNewValue() : {ProbType, ProbType}
+		var fwdPropLP, rvsPropLP = self.rv1:proposeNewValue()
+		self.rv2:setValue(self.rv1:pointerToValue())
+		self.logprob = self.rv1.logprob
+	end
+	inheritance.virtual(InterpolationRandVarT, "proposeNewValue")
 
-m.addConstructors(InterpolationRandVar)
+	m.addConstructors(InterpolationRandVarT)
+	return InterpolationRandVarT
+end)
 
 
 
@@ -81,126 +87,148 @@ m.addConstructors(InterpolationRandVar)
 -- Trace for the linear interpolation of two programs
 -- Only valid for programs with the same set of random variables.
 -- This fine, since we only use this for LARJ proposals
-local struct InterpolationTrace
-{
-	trace1: &GlobalTrace,
-	trace2: &GlobalTrace,
-	alpha: double,
-	varlist: Vector(&RandVar),
-	interpvars: Vector(&InterpolationRandVar)
-}
-inheritance.dynamicExtend(BaseTrace, InterpolationTrace)
+local InterpolationTrace = templatize(function(ProbType)
+	local BaseTraceT = BaseTrace(ProbType)
+	local GlobalTraceT = GlobalTrace(ProbType)
+	local RandVarT = RandVar(ProbType)
+	local InterpolationRandVarT = InterpolationRandVar(ProbType)
+	local struct InterpolationTraceT
+	{
+		trace1: &GlobalTraceT,
+		trace2: &GlobalTraceT,
+		alpha: double,
+		varlist: Vector(&RandVarT),
+		interpvars: Vector(&InterpolationRandVarT)
+	}
+	inheritance.dynamicExtend(BaseTraceT, InterpolationTraceT)
 
-terra InterpolationTrace:clearVarList()
-	for i=0,self.interpvars.size do
-		m.delete(self.interpvars:get(i))
+	terra InterpolationTraceT:clearVarList()
+		for i=0,self.interpvars.size do
+			m.delete(self.interpvars:get(i))
+		end
+		self.interpvars:clear()
+		self.varlist:clear()
 	end
-	self.interpvars:clear()
-	self.varlist:clear()
-end
 
-terra InterpolationTrace:buildVarList()
-	self.varlist = [Vector(&RandVar)].stackAlloc()
-	self.interpvars = [Vector(&InterpolationRandVar)].stackAlloc()
-	var it = self.trace1.vars:iterator()
-	util.foreach(it, [quote
-		var k, v1 = it:keyvalPointer()
-		var v2 = self.trace2.vars:getPointer(@k)
-		var n1 = v1.size
-		var n2 = 0
-		if v2 ~= nil then n2 = v2.size end
-		var minN = n1
-		if n2 < n1 then minN = n2 end
-		-- Variables shared by both traces
-		for i=0,minN do
-			var ivar = InterpolationRandVar.heapAlloc(v1:get(i), v2:get(i))
-			self.varlist:push(ivar)
-			self.interpvars:push(ivar)
+	terra InterpolationTraceT:buildVarList()
+		self.varlist = [Vector(&RandVarT)].stackAlloc()
+		self.interpvars = [Vector(&InterpolationRandVarT)].stackAlloc()
+		var it = self.trace1.vars:iterator()
+		util.foreach(it, [quote
+			var k, v1 = it:keyvalPointer()
+			var v2 = self.trace2.vars:getPointer(@k)
+			var n1 = v1.size
+			var n2 = 0
+			if v2 ~= nil then n2 = v2.size end
+			var minN = n1
+			if n2 < n1 then minN = n2 end
+			-- Variables shared by both traces
+			for i=0,minN do
+				var ivar = InterpolationRandVarT.heapAlloc(v1:get(i), v2:get(i))
+				self.varlist:push(ivar)
+				self.interpvars:push(ivar)
+			end
+			-- Variables that only trace1 has
+			for i=minN,n1 do
+				self.varlist:push(v1:get(i))
+			end
+			-- Variables that only trace2 has
+			for i=n1,n2 do
+				self.varlist:push(v2:get(i))
+			end
+		end])
+	end
+
+	terra InterpolationTraceT:updateLPCond()
+		self.logprob = (1.0 - self.alpha)*self.trace1.logprob + self.alpha*self.trace2.logprob
+		self.conditionsSatisfied = self.trace1.conditionsSatisfied and self.trace2.conditionsSatisfied
+	end
+
+	-- NOTE: This assumes ownership of t1 and t2
+	terra InterpolationTraceT:__construct(t1: &GlobalTraceT, t2: &GlobalTraceT)
+		BaseTraceT.__construct(self)
+		-- IMPORTANT: initialize the virtual template vtable!
+		self:init_traceUpdateVtable()
+		self:init_deepcopyVtable()
+		-- Setup other stuff
+		self.trace1 = t1
+		self.trace2 = t2
+		self.alpha = 0.0
+		self:updateLPCond()
+		self:buildVarList()
+	end
+
+	InterpolationTraceT.__templatecopy = templatize(function(P)
+		local BaseTraceP = BaseTrace(P)
+		return terra(self: &InterpolationTraceT, other: &InterpolationTrace(P))
+			[BaseTraceT.__templatecopy(P)](self, other)
+			-- IMPORTANT: initialize the virtual template vtable!
+			self:init_traceUpdateVtable()
+			self:init_deepcopyVtable()
+			self.trace1 = [&GlobalTraceT]([BaseTraceP.deepcopy(ProbType)](other.trace1))
+			self.trace2 = [&GlobalTraceT]([BaseTraceP.deepcopy(ProbType)](other.trace2))
+			self.alpha = other.alpha
+			self:updateLPCond()
+			self:buildVarList()
 		end
-		-- Variables that only trace1 has
-		for i=minN,n1 do
-			self.varlist:push(v1:get(i))
+	end)
+
+	terra InterpolationTraceT:__destruct() : {}
+		self:clearVarList()
+		m.delete(self.trace1)
+		m.delete(self.trace2)
+		m.destruct(self.varlist)
+		m.destruct(self.interpvars)
+	end
+	inheritance.virtual(InterpolationTraceT, "__destruct")
+
+	virtualTemplate(InterpolationTraceT, "deepcopy", function(P) return {}->{&BaseTrace(P)} end, function(P)
+		local InterpolationTraceP = InterpolationTrace(P)
+		return terra(self: &InterpolationTraceT)
+			var t = m.new(InterpolationTraceP)
+			[InterpolationTraceP.__templatecopy(ProbType)](t, self)
+			return t
 		end
-		-- Variables that only trace2 has
-		for i=n1,n2 do
-			self.varlist:push(v2:get(i))
-		end
-	end])
-end
+	end)
 
-terra InterpolationTrace:updateLPCond()
-	self.logprob = (1.0 - self.alpha)*self.trace1.logprob + self.alpha*self.trace2.logprob
-	self.conditionsSatisfied = self.trace1.conditionsSatisfied and self.trace2.conditionsSatisfied
-end
+	terra InterpolationTraceT:deepcopy() : &BaseTraceT
+		return [BaseTraceT.deepcopy(ProbType)](self)
+	end
+	inheritance.virtual(InterpolationTraceT, "deepcopy")
 
-terra InterpolationTrace:__construct(t1: &GlobalTrace, t2: &GlobalTrace)
-	BaseTrace.__construct(self)
-	-- IMPORTANT: initialize the virtual template vtable!
-	self:init_traceUpdateVtable()
-	-- Setup other stuff
-	self.trace1 = t1
-	self.trace2 = t2
-	self.alpha = 0.0
-	self:updateLPCond()
-	self:buildVarList()
-end
+	terra InterpolationTraceT:varListPointer() : &Vector(&RandVarT)
+		return &self.varlist
+	end
+	inheritance.virtual(InterpolationTraceT, "varListPointer")
 
-terra InterpolationTrace:__copy(trace: &InterpolationTrace)
-	BaseTrace.__copy(self, trace)
-	-- IMPORTANT: initialize the virtual template vtable!
-	self:init_traceUpdateVtable()
-	self.trace1 = [&GlobalTrace](trace.trace1:deepcopy())
-	self.trace2 = [&GlobalTrace](trace.trace2:deepcopy())
-	self.alpha = trace.alpha
-	self:updateLPCond()
-	self:buildVarList()
-end
-
-terra InterpolationTrace:__destruct() : {}
-	self:clearVarList()
-	m.delete(self.trace1)
-	m.delete(self.trace2)
-	m.destruct(self.varlist)
-	m.destruct(self.interpvars)
-end
-inheritance.virtual(InterpolationTrace, "__destruct")
-
-terra InterpolationTrace:deepcopy() : &BaseTrace
-	var t = m.new(InterpolationTrace)
-	t:__copy(self)
-	return t
-end
-inheritance.virtual(InterpolationTrace, "deepcopy")
-
-terra InterpolationTrace:varListPointer() : &Vector(&RandVar)
-	return &self.varlist
-end
-inheritance.virtual(InterpolationTrace, "varListPointer")
-
-terra InterpolationTrace:setAlpha(alpha: double)
-	self.alpha = alpha
-	self:updateLPCond()
-end
-
--- Generate specialized 'traceUpdate code'
-virtualTemplate(InterpolationTrace, "traceUpdate", function(...) return {}->{} end, function(...)
-	local paramtable = spec.paramListToTable(...)
-	return terra(self: &InterpolationTrace) : {}
-		var t1 = self.trace1
-		var t2 = self.trace2
-		[trace.traceUpdate(t1, paramtable)]
-		[trace.traceUpdate(t2, paramtable)]
+	terra InterpolationTraceT:setAlpha(alpha: double)
+		self.alpha = alpha
 		self:updateLPCond()
 	end
-end)
 
-m.addConstructors(InterpolationTrace)
+	-- Generate specialized 'traceUpdate code'
+	virtualTemplate(InterpolationTraceT, "traceUpdate", function(...) return {}->{} end, function(...)
+		local paramtable = spec.paramListToTable(...)
+		return terra(self: &InterpolationTraceT) : {}
+			var t1 = self.trace1
+			var t2 = self.trace2
+			[trace.traceUpdate(t1, paramtable)]
+			[trace.traceUpdate(t2, paramtable)]
+			self:updateLPCond()
+		end
+	end)
+
+	m.addConstructors(InterpolationTraceT)
+	return InterpolationTraceT
+end)
 
 
 
 
 
 -- The actual LARJ algorithm, as an MCMC kernel
+local InterpolationTraceD = InterpolationTrace(double)
+local GlobalTraceD = GlobalTrace(double)
 local struct LARJKernel
 {
 	diffusionKernel: &MCMCKernel,
@@ -225,10 +253,10 @@ terra LARJKernel:__destruct() : {}
 end
 inheritance.virtual(LARJKernel, "__destruct")
 
-terra LARJKernel:next(currTrace: &BaseTrace)  : &BaseTrace
+terra LARJKernel:next(currTrace: &BaseTraceD)  : &BaseTraceD
 	self.jumpProposalsMade = self.jumpProposalsMade + 1
-	var oldStructTrace = [&GlobalTrace](currTrace:deepcopy())
-	var newStructTrace = [&GlobalTrace](currTrace:deepcopy())
+	var oldStructTrace = [&GlobalTraceD](currTrace:deepcopy())
+	var newStructTrace = [&GlobalTraceD](currTrace:deepcopy())
 
 	-- Randomly change a structural variable
 	var freevars = newStructTrace:freeVars(true, false)
@@ -243,17 +271,17 @@ terra LARJKernel:next(currTrace: &BaseTrace)  : &BaseTrace
 	-- Do annealing, if more than zero annealing steps specified.
 	var annealingLpRatio = 0.0
 	if self.intervals > 0 and self.stepsPerInterval > 0 then
-		var lerpTrace = InterpolationTrace.heapAlloc(oldStructTrace, newStructTrace)
+		var lerpTrace = InterpolationTraceD.heapAlloc(oldStructTrace, newStructTrace)
 		for ival=0,self.intervals do
 			lerpTrace:setAlpha(ival/(self.intervals-1.0))
 			for step=0,self.stepsPerInterval do
 				annealingLpRatio = annealingLpRatio + lerpTrace.logprob
-				lerpTrace = [&InterpolationTrace](self.diffusionKernel:next(lerpTrace))
+				lerpTrace = [&InterpolationTraceD](self.diffusionKernel:next(lerpTrace))
 				annealingLpRatio = annealingLpRatio - lerpTrace.logprob
 			end
 		end
-		oldStructTrace = [&GlobalTrace](lerpTrace.trace1:deepcopy())
-		newStructTrace = [&GlobalTrace](lerpTrace.trace2:deepcopy())
+		oldStructTrace = [&GlobalTraceD](lerpTrace.trace1:deepcopy())
+		newStructTrace = [&GlobalTraceD](lerpTrace.trace2:deepcopy())
 		m.delete(lerpTrace)
 	end
 

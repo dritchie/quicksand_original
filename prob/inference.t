@@ -1,6 +1,7 @@
 local trace = terralib.require("prob.trace")
 local spec = terralib.require("prob.specialize")
 local BaseTrace = trace.BaseTrace
+local BaseTraceD = BaseTrace(double)
 local RandExecTrace = trace.RandExecTrace
 local TraceWithRetVal = trace.TraceWithRetVal
 local inheritance = terralib.require("inheritance")
@@ -19,7 +20,7 @@ inline void flush() { fflush(stdout); }
 -- Base class for all MCMC kernels
 local struct MCMCKernel {}
 inheritance.purevirtual(MCMCKernel, "__destruct", {}->{})
-inheritance.purevirtual(MCMCKernel, "next", {&BaseTrace}->{&BaseTrace})
+inheritance.purevirtual(MCMCKernel, "next", {&BaseTraceD}->{&BaseTraceD})
 inheritance.purevirtual(MCMCKernel, "stats", {}->{})
 inheritance.purevirtual(MCMCKernel, "name", {}->{rawstring})
 
@@ -79,7 +80,7 @@ end
 terra RandomWalkKernel:__destruct() : {} end
 inheritance.virtual(RandomWalkKernel, "__destruct")
 
-terra RandomWalkKernel:next(currTrace: &BaseTrace) : &BaseTrace
+terra RandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	self.proposalsMade = self.proposalsMade + 1
 	var nextTrace = currTrace
 	var numvars = currTrace:numFreeVars(self.structs, self.nonstructs)
@@ -172,7 +173,7 @@ terra MultiKernel:__destruct() : {}
 end
 inheritance.virtual(MultiKernel, "__destruct")
 
-terra MultiKernel:next(currTrace: &BaseTrace) : &BaseTrace
+terra MultiKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	var whichKernel = [rand.multinomial_sample(double)](self.freqs)
 	return self.kernels:get(whichKernel):next(currTrace)
 end
@@ -244,7 +245,7 @@ local function mcmc(computation, kernelgen, params)
 	local terra chain()
 		var kernel = [kernelgen()]
 		var samps = [Vector(Sample(RetValType))].stackAlloc()
-		var currTrace : &BaseTrace = [trace.newTrace(computation)]
+		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
 		for i=0,iters do
 			if verbose then
 				C.printf(" iteration: %d\r", i+1)
@@ -252,7 +253,7 @@ local function mcmc(computation, kernelgen, params)
 			end
 			currTrace = kernel:next(currTrace)
 			if i % lag == 0 and i > burnin then
-				var derivedTrace = [&RandExecTrace(computation)](currTrace)
+				var derivedTrace = [&RandExecTrace(double, computation)](currTrace)
 				samps:push([Sample(RetValType)].stackAlloc(derivedTrace.returnValue, derivedTrace.logprob))
 			end
 		end

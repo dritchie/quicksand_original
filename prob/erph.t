@@ -1,37 +1,47 @@
 local inheritance = terralib.require("inheritance")
 local templatize = terralib.require("templatize")
+local virtualTemplate = terralib.require("vtemplate")
 local ad = terralib.require("ad")
 
 
 -- Base class for all random variables
-local struct RandVar
-{
-	logprob: double,
-	isStructural: bool,
-	isDirectlyConditioned: bool,
-	isActive: bool
-}
+local RandVar
+RandVar = templatize(function(ProbType)
+	local struct RandVarT
+	{
+		logprob: ProbType,
+		isStructural: bool,
+		isDirectlyConditioned: bool,
+		isActive: bool
+	}
 
-terra RandVar:__construct(isstruct: bool, iscond: bool)
-	self.isStructural = isstruct
-	self.isDirectlyConditioned = iscond
-	self.isActive = true
-	self.logprob = 0.0
-end
+	terra RandVarT:__construct(isstruct: bool, iscond: bool)
+		self.isStructural = isstruct
+		self.isDirectlyConditioned = iscond
+		self.isActive = true
+		self.logprob = ProbType(0.0)
+	end
 
-terra RandVar:__copy(othervar: &RandVar)
-	self.isStructural = othervar.isStructural
-	self.isDirectlyConditioned = othervar.isDirectlyConditioned
-	self.isActive = othervar.isActive
-	self.logprob = othervar.logprob
-end
+	RandVarT.__templatecopy = templatize(function(P)
+		return terra(self: &RandVarT, other: &RandVar(P))
+			self:__initvtable()	-- because I'm paranoid
+			self.isStructural = other.isStructural
+			self.isDirectlyConditioned = other.isDirectlyConditioned
+			self.isActive = other.isActive
+			self.logprob = other.logprob	-- a cast had better exist
+		end
+	end)
 
-inheritance.purevirtual(RandVar, "__destruct", {}->{})
-inheritance.purevirtual(RandVar, "deepcopy", {}->{&RandVar})
-inheritance.purevirtual(RandVar, "valueTypeID", {}->{uint64})
-inheritance.purevirtual(RandVar, "pointerToValue", {}->{&opaque})
-inheritance.purevirtual(RandVar, "proposeNewValue", {}->{double,double})
-inheritance.purevirtual(RandVar, "setValue", {&opaque}->{})
+	inheritance.purevirtual(RandVarT, "__destruct", {}->{})
+	inheritance.purevirtual(RandVarT, "valueTypeID", {}->{uint64})
+	inheritance.purevirtual(RandVarT, "pointerToValue", {}->{&opaque})
+	inheritance.purevirtual(RandVarT, "proposeNewValue", {}->{ProbType,ProbType})
+	inheritance.purevirtual(RandVarT, "setValue", {&opaque}->{})
+
+	RandVarT.deepcopy = virtualTemplate(RandVarT, "deepcopy", function(P) return {}->{&RandVar(P)} end)
+
+	return RandVarT
+end)
 
 
 -- Functions to inspect the value type of any random variable
@@ -48,14 +58,14 @@ local function typeToID(terratype)
 end
 local valueIs = templatize(function(T)
 	local Ttype = typeToID(T)
-	return terra(randvar: &RandVar)
-		return randvar:valueTypeID() == Ttype
-	end
+	return macro(function(randvar)
+		return `randvar:valueTypeID() == Ttype
+	end)
 end)
 local valueAs = templatize(function(T)
-	return terra(randvar: &RandVar)
-		return @([&T](randvar:pointerToValue()))
-	end
+	return macro(function(randvar)
+		return `@([&T](randvar:pointerToValue()))
+	end)
 end)
 
 
@@ -65,6 +75,7 @@ end)
 --    number of Param types. It returns a function that is templated on 
 --    the Value type but overloaded on possible Param types.
 -- A Param type is a scalar type -- either double or ad.num.
+-- A Value type is also a scalar type.
 -- This is useful for creating samplers and scorers for ERPs
 --    (macros are another option).
 local function overloadOnParams(numparams, fntemplate)
