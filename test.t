@@ -111,30 +111,29 @@ local maybenot = macro(function()
 	return not doingNonstructOpt
 end)
 
-
 local terra doTests()
 
 	C.printf("starting tests...\n")
 
 	var t1 = C.currentTimeInSeconds()
 
-	-- ERP tests
+	-- -- ERP tests
 
-	[fwdtest(
-	"flip sample",
-	terra() : double
-		return double(flip(0.7))
-	end,
-	0.7)]
+	-- [fwdtest(
+	-- "flip sample",
+	-- terra() : double
+	-- 	return double(flip(0.7, {structural=maybenot()}))
+	-- end,
+	-- 0.7)]
 
-	[mhtest(
-	"flip query",
-	function()
-		return terra() : double
-			return double(flip(0.7, {structural=maybenot()}))
-		end
-	end,
-	0.7)]
+	-- [mhtest(
+	-- "flip query",
+	-- function()
+	-- 	return terra() : double
+	-- 		return double(flip(0.7, {structural=maybenot()}))
+	-- 	end
+	-- end,
+	-- 0.7)]
 
 	-- [fwdtest(
 	-- "uniform sample",
@@ -313,7 +312,7 @@ local terra doTests()
 	-- {-1.9205584583201643, -1.8560199371825927, -2.821100833226181})]
 
 
-	-- -- -- Tests adapted from Church
+	-- -- Tests adapted from Church
 
 	-- [mhtest(
 	-- "setting a flip",
@@ -585,20 +584,20 @@ local terra doTests()
 	-- end,
 	-- 0.417)]
 
-	-- [larjtest(
-	-- "trans-dimensional (LARJ)",
-	-- function()
-	-- 	return terra() : double
-	-- 		var a = 0.7
-	-- 		if flip(0.9) then
-	-- 			a = beta(1, 5, {structural=maybenot()})
-	-- 		end
-	-- 		var b = flip(a, {structural=maybenot()})
-	-- 		condition(b)
-	-- 		return a
-	-- 	end
-	-- end,
-	-- 0.417)]
+	[larjtest(
+	"trans-dimensional (LARJ)",
+	function()
+		return terra() : double
+			var a = 0.7
+			if flip(0.9) then
+				a = beta(1, 5, {structural=maybenot()})
+			end
+			var b = flip(a, {structural=maybenot()})
+			condition(b)
+			return a
+		end
+	end,
+	0.417)]
 
 	-- [mhtest(
 	-- "memoized flip in if branch (create/destroy memprocs), unconditioned",

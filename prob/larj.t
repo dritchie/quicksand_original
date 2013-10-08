@@ -42,13 +42,6 @@ local InterpolationRandVar = templatize(function(ProbType)
 		self.rv2 = rv2
 	end
 
-	-- -- AFAIK, this is an unnecessary operation...
-	-- terra InterpolationRandVarT:__copy(other: &InterpolationRandVarT)
-	-- 	RVar.__copy(self, other)
-	-- 	self.rv1 = other.rv1
-	-- 	self.rv2 = other.rv2
-	-- end
-
 	terra InterpolationRandVarT:__destruct() : {}
 		-- Does nothing
 		-- I thought about putting this stub in RandVar and just not having a
@@ -73,6 +66,7 @@ local InterpolationRandVar = templatize(function(ProbType)
 		var fwdPropLP, rvsPropLP = self.rv1:proposeNewValue()
 		self.rv2:setValue(self.rv1:pointerToValue())
 		self.logprob = self.rv1.logprob
+		return fwdPropLP, rvsPropLP
 	end
 	inheritance.virtual(InterpolationRandVarT, "proposeNewValue")
 
@@ -87,7 +81,8 @@ end)
 -- Trace for the linear interpolation of two programs
 -- Only valid for programs with the same set of random variables.
 -- This fine, since we only use this for LARJ proposals
-local InterpolationTrace = templatize(function(ProbType)
+local InterpolationTrace
+InterpolationTrace = templatize(function(ProbType)
 	local BaseTraceT = BaseTrace(ProbType)
 	local GlobalTraceT = GlobalTrace(ProbType)
 	local RandVarT = RandVar(ProbType)

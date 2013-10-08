@@ -107,7 +107,7 @@ local pfn = spec.specializable(function(...)
 		end
 		-- Allow this macro to masquerade as a Terra function
 		ret.getdefinitions = function(self) return self.data.definition:getdefinitions() end
-		ret.gettype = function(self) return self.data.definition:gettype() end
+		ret.gettype = function(self, async) return self.data.definition:gettype(async) end
 		ret.peektype = function(self) return self.data.definition:peektype() end
 		return ret
 	end
@@ -416,7 +416,7 @@ RandExecTrace = templatize(function(ProbType, computation)
 			self:init_traceUpdateVtable()
 			self:init_deepcopyVtable()
 			-- I don't think it's actually necessary to copy the return value...
-			--self.returnValue = [m.templatecopy(ProbType)](other)
+			-- self.returnValue = [m.templatecopy(ProbType)](other.returnValue)
 		end
 	end)
 
@@ -530,7 +530,8 @@ end
 
 local function lookupVariableValueStructural(RandVarType, isstruct, iscond, condVal, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
-	return quote
+	local q =
+	quote
 		var rv = [&RandVarType](globTrace:lookupVariableStructural(isstruct))
 		if rv ~= nil then
 			-- Check for changes that necessitate a logprob update
@@ -550,6 +551,8 @@ local function lookupVariableValueStructural(RandVarType, isstruct, iscond, cond
 	in
 		retval
 	end
+	-- q:printpretty()
+	return q
 end
 
 local function lookupVariableValueNonStructural(RandVarType, isstruct, iscond, condVal, params, specParams)

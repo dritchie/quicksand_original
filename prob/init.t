@@ -2,6 +2,7 @@ local spec = terralib.require("prob.specialize")
 
 ----------------------------------
 -- Specialization parameters and their defaults
+spec.addParam("computation", function() error("Specialization parameter 'computation' is not defined") end)
 spec.addParam("structureChange", true)
 spec.addParam("factorEval", true)
 spec.addParam("doingInference", false)

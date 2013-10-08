@@ -69,6 +69,17 @@ local function isSpecializable(obj)
 	return getmetatable(obj) == specializableMT
 end
 
+-- Register different events to run before doing a global specialization
+local preGlobalEvents = {}
+local function registerPreGlobalSpecializationEvent(event)
+	table.insert(preGlobalEvents, event)
+end
+local function runPreGlobalSpecializationEvents()
+	for _,e in ipairs(preGlobalEvents) do
+		e()
+	end
+end
+
 -- The registry of global specializables, and methods for modifying
 -- the global environment according to specialization parameters
 local globalSpecs = {}
@@ -76,6 +87,9 @@ local function registerGlobalSpecializable(name, obj)
 	globalSpecs[name] = obj
 end
 local function executeUnderGlobalSpecialization(thunk, paramTable)
+	paramTable.computation = thunk
+	runPreGlobalSpecializationEvents()
+	-- print("starting global specialization...")
 	local globalEnv = util.copytable(_G)
 	-- Set up global specialization environment
 	for name,obj in pairs(globalSpecs) do
@@ -87,6 +101,7 @@ local function executeUnderGlobalSpecialization(thunk, paramTable)
 	for name,_ in pairs(globalSpecs) do
 		rawset(_G, name, globalEnv[name])
 	end
+	-- print("global specialization done.")
 	return ret
 end
 
@@ -129,6 +144,7 @@ return
 	specializable = specializable,
 	specializablethunk = specializablethunk,
 	isSpecializable = isSpecializable,
+	registerPreGlobalSpecializationEvent = registerPreGlobalSpecializationEvent,
 	registerGlobalSpecializable = registerGlobalSpecializable
 }
 

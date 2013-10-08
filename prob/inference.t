@@ -9,6 +9,7 @@ local m = terralib.require("mem")
 local rand = terralib.require("prob.random")
 local templatize = terralib.require("templatize")
 local Vector = terralib.require("vector")
+local erp = terralib.require("prob.erph")
 
 local C = terralib.includecstring [[
 #include <stdio.h>

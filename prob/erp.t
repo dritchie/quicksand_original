@@ -125,7 +125,6 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
 	terra RandVarFromFunctionsT:__construct(val: ValType, isstruct: bool, iscond: bool, [paramsyms])
 		ParentClass.__construct(self, val, isstruct, iscond)
-		self:init_deepcopyVtable()
 		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]
 		self:updateLogprob()
 	end
@@ -135,7 +134,6 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	terra RandVarFromFunctionsT:__construct(isstruct: bool, iscond: bool, [paramsyms])
 		var val = sample([paramsyms])
 		ParentClass.__construct(self, val, isstruct, iscond)
-		self:init_deepcopyVtable()
 		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]
 		self:updateLogprob()
 	end
@@ -147,23 +145,14 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		return sample([paramsyms])
 	end
 
-	-- Copy constructor...
-	RandVarFromFunctionsT.__templatecopy = templatize(function(P)
-		local RVFFP = RandVarFromFunctions(P, sampleTemplate, logprobTemplate, proposeTemplate)
+	-- Copy constructor
+	-- Variadic args are paramtypes
+	RandVarFromFunctionsT.__templatecopy = templatize(function(P, ...)
+		local RVFFP = RandVarFromFunctions(P, sampleTemplate, logprobTemplate, proposeTemplate, ...)
 		local V = RVFFP.ValType
 		return terra(self: &RandVarFromFunctionsT, other: &RVFFP)
 			[ParentClass.__templatecopy(P, V)](self, other)
-			self:init_deepcopyVtable()
 			[genParamFieldsExpList(self)] = [wrapExpListWithTemplateCopies(genParamFieldsExpList(other), ProbType)]
-		end
-	end)
-	-- ...and implementing the "deepcopy" virtual template method
-	virtualTemplate(RandVarFromFunctionsT, "deepcopy", function(P) return {}->{&RandVar(P)} end, function(P)
-		local RVFFP = RandVarFromFunctions(P, sampleTemplate, logprobTemplate, proposeTemplate)
-		return terra(self: &RandVarFromFunctionsT)
-			var newvar = m.new(RVFFP)
-			[RVFFP.__templatecopy(ProbType)](newvar, self)
-			return newvar
 		end
 	end)
 
@@ -251,6 +240,85 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 end)
 
 
+-- OK, I lied: this isn't quite the bottom of the hierarchy. We actually need to have a unique
+--    type for every ERP callsite, which requires a minor extension of the above class.
+-- This does not use the normal templating mechanism, since creation and retrieval of classes
+--    need to happen through different interfaces.
+-- As above, variadic args are the parameter types for the ERP.
+local randVarFromCallsiteCache = {}
+local function getRandVarFromCallsite(scalarType, computation, callsiteID)
+	local key = util.stringify(scalarType, computation, callsiteID)
+	return randVarFromCallsiteCache[key]
+end
+-- This is the public interface to getting the ERP type
+-- External code can treat this as if it were a normal template.
+local function RandVarFromCallsite(scalarType, computation, callsiteID)
+	-- Invoke the computation template to guarantee that the ERP specialization will exist.
+	local paramTable = {scalarType=scalarType, doingInference=true}
+	computation(paramTable)	-- Throw away the return value; we only care about the side effects.
+	local class = getRandVarFromCallsite(scalarType, computation, callsiteID)
+	-- It had better exist after we specialized computation!
+	assert(class)
+	return class
+end
+local function createRandVarFromCallsite(scalarType, sample, logprobfn, propose, computation, ...)
+	local id = erph.getCurrentERPID()
+
+	-- Check if we've already built this specialization
+	local class = getRandVarFromCallsite(scalarType, computation, id)
+	if class then return class end
+
+	-- Otherwise, we need to build the class
+	local struct RandVarFromCallsiteT {}
+	RandVarFromCallsiteT.paramTypes = {...}
+	local ParentClass = RandVarFromFunctions(scalarType, sample, logprobfn, propose, ...)
+	inheritance.dynamicExtend(ParentClass, RandVarFromCallsiteT)
+
+	-- Need a new constructor that initializes the deepcopy vtable
+	local ctor = ParentClass.methods.__construct
+	local newctor = nil
+	for _,d in ipairs(ctor:getdefinitions()) do
+		local syms = {symbol(&RandVarFromCallsiteT)}
+		local paramtypes = d:gettype().parameters
+		for i=2,#paramtypes do table.insert(syms, symbol(paramtypes[i])) end
+		local self = syms[1]
+		local def = terra([syms])
+			ctor([syms])
+			self:init_deepcopyVtable()
+		end
+		if not newctor then newctor = def else newctor:adddefinition(def:getdefinitions()[1]) end
+	end
+	RandVarFromCallsiteT.methods.__construct = newctor
+
+	-- Also need a new __templatecopy for this reason.
+	RandVarFromCallsiteT.__templatecopy = templatize(function(P)
+		local RandVarFromCallsiteP = RandVarFromCallsite(P, computation, id)
+		return terra(self: &RandVarFromCallsiteT, other: &RandVarFromCallsiteP)
+			[ParentClass.__templatecopy(P, unpack(RandVarFromCallsiteP.paramTypes))](self, other)
+			self:init_deepcopyVtable()
+		end
+	end)
+
+	-- The only real extra functionality provided by this subclass is deepcopy.
+	-- We need to know exactly which ERP type to copy into, which requires knowledge of
+	--   parameter types, which may vary from callsite to callsite.
+	virtualTemplate(RandVarFromCallsiteT, "deepcopy", function(P) return {}->{&RandVar(P)} end, function(P)
+		local RandVarFromCallsiteP = RandVarFromCallsite(P, computation, id)
+		return terra(self: &RandVarFromCallsiteT)
+			var newvar = m.new(RandVarFromCallsiteP)
+			[RandVarFromCallsiteP.__templatecopy(scalarType)](newvar, self)
+			return newvar
+		end
+	end)
+
+	-- Finish up
+	m.addConstructors(RandVarFromCallsiteT)
+	local key = util.stringify(scalarType, computation, id)
+	randVarFromCallsiteCache[key] = RandVarFromCallsiteT
+	return RandVarFromCallsiteT
+end
+
+
 -- Make a new random primitive
 -- This returns a Lua function which performs sampling (the public interface to the 
 --   random primitive)
@@ -263,15 +331,15 @@ local function makeERP(sample, logprobfn, propose)
 
 	-- If we don't have propose function, make a default.
 	if not propose then
-		return templatize(function(V)
+		propose = templatize(function(V)
 			return macro(function(currval, ...)
 				local params = {}
 				for i=1,select("#",...) do table.insert(params, (select(i,...))) end
 				-- Default: sample and score a new value irrespective of the current value
 				return quote
-					var newval = sample([params])
-					var fwdPropLP = logprobfn(newval, [params])
-					var rvsPropLP = logprobfn(currval, [params])
+					var newval = [sample(V)]([params])
+					var fwdPropLP = [logprobfn(V)](newval, [params])
+					var rvsPropLP = [logprobfn(V)](currval, [params])
 				in
 					newval, fwdPropLP, rvsPropLP
 				end
@@ -284,11 +352,12 @@ local function makeERP(sample, logprobfn, propose)
 	local genErpFunction = spec.specializable(function(...)
 		local specParams = spec.paramListToTable(...)
 		local V = spec.paramFromTable("scalarType", specParams)
+		local computation = spec.paramFromTable("computation", specParams)
 		local erpfn = nil
 		for _,d in ipairs(sample(V):getdefinitions()) do
 			local paramtypes = d:gettype().parameters
 			local rettype = d:gettype().returns[1]
-			local RandVarType = RandVarFromFunctions(V, sample, logprobfn, propose, unpack(paramtypes))
+			local RandVarType = createRandVarFromCallsite(V, sample, logprobfn, propose, computation, unpack(paramtypes))
 			local params = {}
 			for _,t in ipairs(paramtypes) do table.insert(params, symbol(t)) end
 			-- First the conditioned version

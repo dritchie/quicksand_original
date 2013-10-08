@@ -2,6 +2,11 @@ local inheritance = terralib.require("inheritance")
 local templatize = terralib.require("templatize")
 local virtualTemplate = terralib.require("vtemplate")
 local ad = terralib.require("ad")
+local spec = terralib.require("prob.specialize")
+
+local C = terralib.includecstring [[
+#include <stdio.h>
+]]
 
 
 -- Base class for all random variables
@@ -24,7 +29,6 @@ RandVar = templatize(function(ProbType)
 
 	RandVarT.__templatecopy = templatize(function(P)
 		return terra(self: &RandVarT, other: &RandVar(P))
-			self:__initvtable()	-- because I'm paranoid
 			self.isStructural = other.isStructural
 			self.isDirectlyConditioned = other.isDirectlyConditioned
 			self.isActive = other.isActive
@@ -45,17 +49,11 @@ end)
 
 
 -- Functions to inspect the value type of any random variable
-local typeToIDMap = {}
-local currID = 0
-local function typeToID(terratype)
-	local id = typeToIDMap[terratype]
-	if not id then
-		id = currID
-		currID = currID + 1
-		typeToIDMap[terratype] = id
-	end
-	return id
-end
+local currID = 1
+local typeToID = templatize(function(terratype)
+	currID = currID+1
+	return currID-1
+end)
 local valueIs = templatize(function(T)
 	local Ttype = typeToID(T)
 	return macro(function(randvar)
@@ -116,13 +114,26 @@ local function overloadOnParams(numparams, fntemplate)
 end
 
 
+-- We sometimes need to have a unique id for every ERP callsite in the program.
+local erpid = 1
+local function getCurrentERPID()
+	erpid = erpid + 1
+	return erpid - 1
+end
+local function resetERPID() erpid = 1 end
+-- The id counter needs to reset at the beginning of compiling a computation,
+--    so that corresponding ERPs from different specializations have the same id. 
+spec.registerPreGlobalSpecializationEvent(resetERPID)
+
+
 return
 {
 	RandVar = RandVar,
 	typeToID = typeToID,
 	valueIs = valueIs,
 	valueAs = valueAs,
-	overloadOnParams = overloadOnParams
+	overloadOnParams = overloadOnParams,
+	getCurrentERPID = getCurrentERPID,
 }
 
 
