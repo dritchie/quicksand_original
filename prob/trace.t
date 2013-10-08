@@ -415,8 +415,6 @@ RandExecTrace = templatize(function(ProbType, computation)
 			-- IMPORTANT: initialize the virtual template vtable!
 			self:init_traceUpdateVtable()
 			self:init_deepcopyVtable()
-			-- I don't think it's actually necessary to copy the return value...
-			-- self.returnValue = [m.templatecopy(ProbType)](other.returnValue)
 		end
 	end)
 
@@ -477,6 +475,7 @@ RandExecTrace = templatize(function(ProbType, computation)
 			quote end]
 
 			-- Run computation
+			m.destruct(self.returnValue)
 			self.returnValue = speccomp()
 
 			-- Clean up

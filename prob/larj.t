@@ -170,8 +170,8 @@ InterpolationTrace = templatize(function(ProbType)
 
 	terra InterpolationTraceT:__destruct() : {}
 		self:clearVarList()
-		m.delete(self.trace1)
-		m.delete(self.trace2)
+		if self.trace1 ~= nil then m.delete(self.trace1) end
+		if self.trace2 ~= nil then m.delete(self.trace2) end
 		m.destruct(self.varlist)
 		m.destruct(self.interpvars)
 	end
@@ -212,6 +212,13 @@ InterpolationTrace = templatize(function(ProbType)
 			self:updateLPCond()
 		end
 	end)
+
+	terra InterpolationTraceT:releaseSubtraces()
+		var t1, t2 = self.trace1, self.trace2
+		self.trace1 = nil
+		self.trace2 = nil
+		return t1, t2
+	end
 
 	m.addConstructors(InterpolationTraceT)
 	return InterpolationTraceT
@@ -275,8 +282,7 @@ terra LARJKernel:next(currTrace: &BaseTraceD)  : &BaseTraceD
 				annealingLpRatio = annealingLpRatio - lerpTrace.logprob
 			end
 		end
-		oldStructTrace = [&GlobalTraceD](lerpTrace.trace1:deepcopy())
-		newStructTrace = [&GlobalTraceD](lerpTrace.trace2:deepcopy())
+		oldStructTrace, newStructTrace = lerpTrace:releaseSubtraces()
 		m.delete(lerpTrace)
 	end
 
