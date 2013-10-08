@@ -10,6 +10,7 @@ local rand = terralib.require("prob.random")
 local templatize = terralib.require("templatize")
 local Vector = terralib.require("vector")
 local erp = terralib.require("prob.erph")
+local ad = terralib.require("ad")
 
 local C = terralib.includecstring [[
 #include <stdio.h>
@@ -59,6 +60,9 @@ local function makeKernelGenerator(kernelfn, defaults)
 		return function() return `kernelfn([args]) end
 	end
 end
+
+
+
 
 
 -- The basic random walk MH kernel
@@ -143,13 +147,96 @@ inheritance.virtual(RandomWalkKernel, "stats")
 m.addConstructors(RandomWalkKernel)
 
 
-
 -- Convenience method for making RandomWalkKernels
 local RandomWalk = makeKernelGenerator(
 	terra(structural: bool, nonstructural: bool)
 		return RandomWalkKernel.heapAlloc(structural, nonstructural)
 	end,
 	{structural=true, nonstructural=true})
+
+
+
+
+
+
+
+-- Random walk kernel that runs an automatically differentiated version
+--    of the program.
+-- Only works on fixed-structure programs whose ERPs all have type double
+-- This is not useful in practice (note that it's not exported as one of
+--     the module's globals), but it's useful for testing that AD dual
+--     nums are working properly.
+local BaseTraceAD = BaseTrace(ad.num)
+local struct ADRandomWalkKernel
+{
+	proposalsMade: uint,
+	proposalsAccepted: uint
+}
+inheritance.dynamicExtend(MCMCKernel, ADRandomWalkKernel)
+
+terra ADRandomWalkKernel:__construct()
+	self.proposalsMade = 0
+	self.proposalsAccepted = 0
+end
+
+terra ADRandomWalkKernel:__destruct() : {} end
+inheritance.virtual(ADRandomWalkKernel, "__destruct")
+
+terra ADRandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
+	self.proposalsMade = self.proposalsMade + 1
+	var nextTrace = [BaseTraceD.deepcopy(ad.num)](currTrace)
+	var freevars = nextTrace:freeVars(false, true)
+	var v = freevars:get(rand.uniformRandomInt(0, freevars.size))
+	var fwdPropLP, rvsPropLP = v:proposeNewValue()
+	[trace.traceUpdate(nextTrace, {structureChange=false})]
+	var acceptThresh = nextTrace.logprob - currTrace.logprob + rvsPropLP - fwdPropLP
+	if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
+		self.proposalsAccepted = self.proposalsAccepted + 1
+		var nextlp = nextTrace.logprob:val()
+		-- Copy values back into currTrace
+		var oldfreevars = currTrace:freeVars(false, true)
+		for i=0,oldfreevars.size do
+			var newval = [erp.valueAs(ad.num)](freevars:get(i))
+			var newval_val = newval:val()
+			oldfreevars:get(i):setValue(&newval_val)
+		end
+		-- Reconstruct return value by running a traceUpdate
+		-- (No need to evaluate any factors)
+		[trace.traceUpdate(currTrace, {structureChange=false, factorEval=false})]
+		-- Set the final logprob (since we didn't evaluate factors)
+		currTrace.logprob = nextlp
+		m.delete(nextTrace)
+	else
+		m.delete(nextTrace)
+	end
+	m.destruct(freevars)
+	return currTrace
+end
+inheritance.virtual(ADRandomWalkKernel, "next")
+
+terra ADRandomWalkKernel:name() : rawstring return [ADRandomWalkKernel.name] end
+inheritance.virtual(ADRandomWalkKernel, "name")
+
+terra ADRandomWalkKernel:stats() : {}
+	C.printf("Acceptance ratio: %g (%u/%u)\n",
+		[double](self.proposalsAccepted)/self.proposalsMade,
+		self.proposalsAccepted,
+		self.proposalsMade)
+end
+inheritance.virtual(ADRandomWalkKernel, "stats")
+
+m.addConstructors(ADRandomWalkKernel)
+
+
+-- Convenience method for making ADRandomWalkKernels
+local ADRandomWalk = makeKernelGenerator(
+	terra()
+		return ADRandomWalkKernel.heapAlloc()
+	end,
+	{})
+
+
+
 
 
 
@@ -196,6 +283,8 @@ m.addConstructors(MultiKernel)
 
 
 
+
+
 ---- Methods for actually doing some kind of inference:
 
 
@@ -235,7 +324,7 @@ end)
 -- returns a Vector of samples, where a sample is a
 --    struct with a 'value' field and a 'logprob' field
 local function mcmc(computation, kernelgen, params)
-	computation = spec.specializablethunk(computation)
+	computation = spec.probcomp(computation)
 	local lag = params.lag or 1
 	local iters = params.numsamps * lag
 	local verbose = params.verbose or false
@@ -311,7 +400,7 @@ end)
 
 -- Draw a sample from a computation via rejection
 local function rejectionSample(computation)
-	computation = spec.specializablethunk(computation)
+	computation = spec.probcomp(computation)
 	return quote
 		var tr = [trace.newTrace(computation)]
 		var retval = tr.returnValue
@@ -327,6 +416,7 @@ return
 	MCMCKernel = MCMCKernel,
 	makeKernelGenerator = makeKernelGenerator,
 	MultiKernel = MultiKernel,
+	ADRandomWalk = ADRandomWalk,   -- Not exported as a global; only for debugging
 	globals = {
 		RandomWalk = RandomWalk,
 		mcmc = mcmc,

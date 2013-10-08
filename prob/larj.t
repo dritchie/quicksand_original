@@ -70,6 +70,12 @@ local InterpolationRandVar = templatize(function(ProbType)
 	end
 	inheritance.virtual(InterpolationRandVarT, "proposeNewValue")
 
+	terra InterpolationRandVarT:setValue(valptr: &opaque) : {}
+		self.rv1:setValue(valptr)
+		self.rv2:setValue(valptr)
+	end
+	inheritance.virtual(InterpolationRandVarT, "setValue")
+
 	m.addConstructors(InterpolationRandVarT)
 	return InterpolationRandVarT
 end)

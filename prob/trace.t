@@ -128,8 +128,8 @@ BaseTrace = templatize(function(ProbType)
 	local struct BaseTraceT
 	{
 		logprob: ProbType,
-		newlogprob: double,
-		oldlogprob: double,
+		newlogprob: ProbType,
+		oldlogprob: ProbType,
 		conditionsSatisfied: bool,
 	}
 

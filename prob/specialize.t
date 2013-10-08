@@ -87,9 +87,7 @@ local function registerGlobalSpecializable(name, obj)
 	globalSpecs[name] = obj
 end
 local function executeUnderGlobalSpecialization(thunk, paramTable)
-	paramTable.computation = thunk
 	runPreGlobalSpecializationEvents()
-	-- print("starting global specialization...")
 	local globalEnv = util.copytable(_G)
 	-- Set up global specialization environment
 	for name,obj in pairs(globalSpecs) do
@@ -97,24 +95,36 @@ local function executeUnderGlobalSpecialization(thunk, paramTable)
 	end
 	-- Execute under new specialization environment
 	local ret = thunk()
+	ret:compile()
 	-- Restore previous versions
 	for name,_ in pairs(globalSpecs) do
 		rawset(_G, name, globalEnv[name])
 	end
-	-- print("global specialization done.")
 	return ret
 end
 
 -- Specialization wrapper for overall probabilistic computation thunks
-local function specializablethunk(thunk)
-	local templatefn = templatize(function(...)
-		local paramTable = paramListToTable(...)
-		return executeUnderGlobalSpecialization(thunk, paramTable)
-	end)
-	return function(paramTable)
+local specthunkmt =
+{
+	__call = function(self, paramTable)
 		paramTable = paramTable or {}
-		return templatefn(unpack(paramTableToList(paramTable)))
+		paramTable.computation = self
+		return self.templatethunk(unpack(paramTableToList(paramTable)))
 	end
+}
+local function probcomp(thunk)
+	local newobj = 
+	{
+		templatethunk = templatize(function(...)
+			local paramTable = paramListToTable(...)
+			return executeUnderGlobalSpecialization(thunk, paramTable)
+		end)
+	}
+	setmetatable(newobj, specthunkmt)
+	return newobj
+end
+local function isProbComp(comp)
+	return getmetatable(comp) == specthunkmt
 end
 
 
@@ -142,8 +152,9 @@ return
 	paramListToTable = paramListToTable,
 	paramTableID = paramTableID,
 	specializable = specializable,
-	specializablethunk = specializablethunk,
 	isSpecializable = isSpecializable,
+	probcomp = probcomp,
+	isProbComp = isProbComp,
 	registerPreGlobalSpecializationEvent = registerPreGlobalSpecializationEvent,
 	registerGlobalSpecializable = registerGlobalSpecializable
 }

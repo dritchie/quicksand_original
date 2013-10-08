@@ -264,6 +264,9 @@ local function RandVarFromCallsite(scalarType, computation, callsiteID)
 	computation(paramTable)	-- Throw away the return value; we only care about the side effects.
 	local class = getRandVarFromCallsite(scalarType, computation, callsiteID)
 	-- It had better exist after we specialized computation!
+	if not class then
+		print(debug.traceback())
+	end
 	assert(class)
 	return class
 end
@@ -408,7 +411,7 @@ local function makeERP(sample, logprobfn, propose)
 	end
 
 	-- Finally, wrap everything in a function that extracts options from the
-	-- options table.
+	-- options struct.
 	return spec.specializable(function(...)
 		local paramTable = spec.paramListToTable(...)
 		return macro(function(...)

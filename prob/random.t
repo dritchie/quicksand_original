@@ -20,6 +20,12 @@ local function specialize(name, numparams, fntemplate)
 end
 
 
+local telltype = macro(function(expr)
+	print(expr:gettype())
+	return expr
+end)
+
+
 fns.random = random
 
 
@@ -60,7 +66,7 @@ specialize("multinomial_sample", 1, function(V, P)
 end)
 
 specialize("multinomial_logprob", 1, function(V, P)
-	return terra(val: int, params: Vector(P))
+	return terra(val: int, params: Vector(P)) : V
 		if val < 0 or val >= params.size then
 			return [-math.huge]
 		end
@@ -80,7 +86,7 @@ specialize("uniform_sample", 2, function(V, P1, P2)
 end)
 
 specialize("uniform_logprob", 2, function(V, P1, P2)
-	return terra(val: V, lo: P1, hi: P2)
+	return terra(val: V, lo: P1, hi: P2) : V
 		if val < lo or val > hi then return [-math.huge] end
 		return -ad.math.log(hi - lo)
 	end
@@ -105,7 +111,7 @@ specialize("gaussian_sample", 2, function(V, P1, P2)
 end)
 
 specialize("gaussian_logprob", 2, function(V, P1, P2)
-	return terra(x: V, mu: P1, sigma: P2)
+	return terra(x: V, mu: P1, sigma: P2) : V
 		var xminusmu = x - mu
 		return -.5*(1.8378770664093453 + 2*ad.math.log(sigma) + xminusmu*xminusmu/(sigma*sigma))
 	end
@@ -119,7 +125,7 @@ specialize("gamma_sample", 2, function(V, P1, P2)
 		var c = 1.0/ad.math.sqrt(9.0*d)
 		while true do
 			repeat
-				x = [fns.gaussian_sample(V)](0.0, 1.0)
+				x = [fns.gaussian_sample(double)](0.0, 1.0)
 				v = 1.0+c*x
 			until v > 0.0
 			v = v*v*v
@@ -152,7 +158,7 @@ local log_gamma = templatize(function(T)
 end)
 
 specialize("gamma_logprob", 2, function(V, P1, P2)
-	return terra(x: V, a: P1, b: P2)
+	return terra(x: V, a: P1, b: P2) : V
 		return (a - 1.0)*ad.math.log(x) - x/b - log_gamma.implicit(a) - a*ad.math.log(b)
 	end
 end)
@@ -171,7 +177,7 @@ local log_beta = templatize(function(T1, T2)
 end)
 
 specialize("beta_logprob", 2, function(V, P1, P2)
-	return terra(x: V, a: P1, b: P2)
+	return terra(x: V, a: P1, b: P2) : V
 		if x > 0.0 and x < 1.0 then
 			return (a-1.0)*ad.math.log(x) + (b-1.0)*ad.math.log(1.0-x) - log_beta.implicit(a,b)
 		else
@@ -188,7 +194,7 @@ specialize("binomial_sample", 1, function(V, P)
 		while n > N do
 			a = 1 + n/2
 			b = 1 + n-a
-			var x = [fns.beta_sample(V)](P(a), P(b))
+			var x = [fns.beta_sample(double)](a, b)
 			if x >= p then
 				n = a - 1
 				p = p / x
@@ -220,7 +226,7 @@ specialize("binomial_logprob", 1, function(V, P)
 	local inv2 = 1/2
 	local inv3 = 1/3
 	local inv6 = 1/6
-	return terra(s: int, p: P, n: int)
+	return terra(s: int, p: P, n: int) : V
 		if s >= n then return [-math.huge] end
 		var q = 1.0-p
 		var S = s + inv2
@@ -285,7 +291,7 @@ local terra lnfact(x: int)
 end
 
 specialize("poisson_logprob", 0, function(V)
-	return terra(k: int, mu: int)
+	return terra(k: int, mu: int) : V
 		return k * ad.math.log(mu) - mu - lnfact(k)
 	end	
 end)
@@ -307,7 +313,7 @@ specialize("dirichlet_sample", 1, function(V, P)
 end)
 
 specialize("dirichlet_logprob", 1, function(V, P)
-	return terra(theta: Vector(V), params: Vector(P))
+	return terra(theta: Vector(V), params: Vector(P)) : V
 		var sum = P(0.0)
 		for i=0,params.size do sum = sum + params:get(i) end
 		var logp = log_gamma.implicit(sum)
