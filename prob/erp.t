@@ -68,8 +68,7 @@ end)
 --          of the provided functions we're using)
 local RandVarFromFunctions
 RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTemplate, proposeTemplate, ...)
-	local paramtypes = {}
-	for i=1,select("#", ...) do table.insert(paramtypes, (select(i,...))) end
+	local paramtypes = {...}
 
 	local sample = sampleTemplate(scalarType)
 	local logprobfn = logprobTemplate(scalarType)
@@ -111,12 +110,18 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		end
 		return ret
 	end
-	local function wrapExpListWithTemplateCopies(explist, ...)
-		local ret = {}
-		for _,exp in ipairs(explist) do
-			table.insert(ret, `[m.templatecopy(...)]([exp]))
+	local function genParamCopyBlock(self, other, otherparamtypes)
+		local selfparamexprs = genParamFieldsExpList(self)
+		local otherparamexprs = genParamFieldsExpList(other)
+		local lines = {}
+		for i=1,#paramtypes do
+			if paramtypes[i] == otherparamtypes[i] then
+				table.insert(lines, quote [selfparamexprs[i]] = m.copy([otherparamexprs[i]]) end)
+			else
+				table.insert(lines, quote [selfparamexprs[i]] = [m.templatecopy(ProbType)]([otherparamexprs[i]]) end)
+			end
 		end
-		return ret
+		return lines
 	end
 
 	---- Constructors take extra parameters
@@ -150,9 +155,10 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	RandVarFromFunctionsT.__templatecopy = templatize(function(P, ...)
 		local RVFFP = RandVarFromFunctions(P, sampleTemplate, logprobTemplate, proposeTemplate, ...)
 		local V = RVFFP.ValType
+		local otherparamtypes = {...}
 		return terra(self: &RandVarFromFunctionsT, other: &RVFFP)
 			[ParentClass.__templatecopy(P, V)](self, other)
-			[genParamFieldsExpList(self)] = [wrapExpListWithTemplateCopies(genParamFieldsExpList(other), ProbType)]
+			[genParamCopyBlock(self, other, otherparamtypes)]
 		end
 	end)
 
