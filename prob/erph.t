@@ -9,6 +9,12 @@ local C = terralib.includecstring [[
 ]]
 
 
+-- The type of real numbers
+local real = spec.specializable(function(...)
+	return spec.paramFromList("scalarType", ...)
+end)
+
+
 -- Base class for all random variables
 local RandVar
 RandVar = templatize(function(ProbType)
@@ -134,6 +140,10 @@ return
 	valueAs = valueAs,
 	overloadOnParams = overloadOnParams,
 	getCurrentERPID = getCurrentERPID,
+	globals =
+	{
+		real = real
+	}
 }
 
 

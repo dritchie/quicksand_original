@@ -42,16 +42,6 @@ local function paramListToTable(...)
 end
 
 
--- Associating unique IDs with param tables
-local psetid = 1
-local ParamSetID = templatize(function(...)
-	psetid = psetid + 1
-	return psetid-1
-end)
-local function paramTableID(paramTable)
-	return ParamSetID(unpack(paramTableToList(paramTable)))
-end
-
 -- Specializable computations
 local specializableMT = {
 	__call = function(self, paramTable)
@@ -128,21 +118,6 @@ local function isProbComp(comp)
 end
 
 
-----------------------------------
-
--- -- TEST
--- assert(globalParam("structureChange") == true)
--- assert(globalParam("factorEval") == true)
--- local t = {structureChange=false}
--- local l = paramTableToList(t)
--- assert(paramFromTable("structureChange", t) == false)
--- assert(paramFromTable("factorEval", t) == true)
--- assert(paramFromList("structureChange", unpack(l)) == false)
--- assert(paramFromList("factorEval", unpack(l)) == true)
--- t = paramListToTable(unpack(l))
--- assert(paramFromTable("structureChange", t) == false)
--- assert(paramFromTable("factorEval", t) == true)
-
 return
 {
 	addParam = addParam,
@@ -150,7 +125,6 @@ return
 	paramFromTable = paramFromTable,
 	paramTableToList = paramTableToList,
 	paramListToTable = paramListToTable,
-	paramTableID = paramTableID,
 	specializable = specializable,
 	isSpecializable = isSpecializable,
 	probcomp = probcomp,

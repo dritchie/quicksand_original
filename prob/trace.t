@@ -372,9 +372,9 @@ RandExecTrace = templatize(function(ProbType, computation)
 
 	local ParentClass = GlobalTrace(ProbType)
 
-	-- Get the type of this computation (requires us to generate the default,
-	--  unspecialized version)
-	local comp = computation()
+	-- We need the return type of this computation, which requires
+	-- us to generate a specialization of it
+	local comp = computation({scalarType=ProbType})
 	local success, CompType = comp:peektype()
 	if not success then CompType = comp:gettype() end
 

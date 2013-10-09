@@ -1,4 +1,5 @@
 local rand = terralib.require("prob.random")
+local inf = terralib.require("prob.inference")
 local m = terralib.require("mem")
 local Vector = terralib.require("vector")
 terralib.require("prob")
@@ -84,6 +85,19 @@ local function larjtest(name, computation, trueExpectation)
 	end
 end
 
+local function adtest(name, computation, trueExpectation)
+	return quote
+		var estimates = [Vector(double)].stackAlloc()
+		for run=0,runs do
+			var samps = [mcmc(computation, inf.ADRandomWalk(), {numsamps=numsamps, lag=lag, verbose=false})]
+			estimates:push([expectation(double)](&samps))
+			m.destruct(samps)
+		end
+		test(name, &estimates, trueExpectation)
+		m.destruct(estimates)
+	end
+end
+
 local function eqtest(name, estimatedValues, trueValues)
 	return quote
 		var estvalues = Vector.fromItems([estimatedValues])
@@ -117,7 +131,7 @@ local terra doTests()
 
 	var t1 = C.currentTimeInSeconds()
 
-	-- -- ERP tests
+	-- ERP tests
 
 	[fwdtest(
 	"flip sample",
@@ -648,6 +662,15 @@ local terra doTests()
 		end
 	end,
 	0.75)]
+
+	[adtest(
+	"gaussian query (with AD dual nums)",
+	function()
+		return terra() : real
+			return gaussian(0.1, 0.5, {structural=maybenot()})
+		end		
+	end,
+	0.1)]
 
 
 	var t2 = C.currentTimeInSeconds()
