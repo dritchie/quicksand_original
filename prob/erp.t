@@ -250,7 +250,6 @@ end)
 --    type for every ERP callsite, which requires a minor extension of the above class.
 -- This does not use the normal templating mechanism, since creation and retrieval of classes
 --    need to happen through different interfaces.
--- As above, variadic args are the parameter types for the ERP.
 local randVarFromCallsiteCache = {}
 local function getRandVarFromCallsite(scalarType, computation, callsiteID)
 	local key = util.stringify(scalarType, computation, callsiteID)
@@ -270,6 +269,7 @@ local function RandVarFromCallsite(scalarType, computation, callsiteID)
 	assert(class)
 	return class
 end
+-- As with RandVarFromFunctions, variadic args are the parameter types for the ERP.
 local function createRandVarFromCallsite(scalarType, sample, logprobfn, propose, computation, ...)
 	local id = erph.getCurrentERPID()
 
@@ -283,37 +283,16 @@ local function createRandVarFromCallsite(scalarType, sample, logprobfn, propose,
 	local ParentClass = RandVarFromFunctions(scalarType, sample, logprobfn, propose, ...)
 	inheritance.dynamicExtend(ParentClass, RandVarFromCallsiteT)
 
-	-- Need a new constructor that initializes the deepcopy vtable
-	local ctor = ParentClass.methods.__construct
-	local newctor = nil
-	for _,d in ipairs(ctor:getdefinitions()) do
-		local syms = {symbol(&RandVarFromCallsiteT)}
-		local paramtypes = d:gettype().parameters
-		for i=2,#paramtypes do table.insert(syms, symbol(paramtypes[i])) end
-		local self = syms[1]
-		local def = terra([syms])
-			ctor([syms])
-		end
-		if not newctor then newctor = def else newctor:adddefinition(def:getdefinitions()[1]) end
-	end
-	RandVarFromCallsiteT.methods.__construct = newctor
-
-	-- Also need a new __templatecopy for this reason.
-	RandVarFromCallsiteT.__templatecopy = templatize(function(P)
-		local RandVarFromCallsiteP = RandVarFromCallsite(P, computation, id)
-		return terra(self: &RandVarFromCallsiteT, other: &RandVarFromCallsiteP)
-			[ParentClass.__templatecopy(P, unpack(RandVarFromCallsiteP.paramTypes))](self, other)
-		end
-	end)
-
-	-- The only real extra functionality provided by this subclass is deepcopy.
+	-- The only extra functionality provided by this subclass is deepcopy.
 	-- We need to know exactly which ERP type to copy into, which requires knowledge of
 	--   parameter types, which may vary from callsite to callsite.
 	virtualTemplate(RandVarFromCallsiteT, "deepcopy", function(P) return {}->{&RandVar(P)} end, function(P)
 		local RandVarFromCallsiteP = RandVarFromCallsite(P, computation, id)
+		local RandVarFromFunctionsP = RandVarFromFunctions(P, sample, logprobfn, propose, unpack(RandVarFromCallsiteP.paramTypes))
 		return terra(self: &RandVarFromCallsiteT)
 			var newvar = m.new(RandVarFromCallsiteP)
-			[RandVarFromCallsiteP.__templatecopy(scalarType)](newvar, self)
+			-- Can just call the parent class __templatecopy since there's no new copy functionality added.
+			[RandVarFromFunctionsP.__templatecopy(scalarType, unpack(RandVarFromCallsiteT.paramTypes))](newvar, self)
 			return newvar
 		end
 	end)
