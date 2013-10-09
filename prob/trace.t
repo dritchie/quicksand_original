@@ -392,9 +392,6 @@ RandExecTrace = templatize(function(ProbType, computation)
 
 	terra Trace:__construct()
 		ParentClass.__construct(self)
-		-- IMPORTANT: initialize the virtual template vtable!
-		self:init_traceUpdateVtable()
-		self:init_deepcopyVtable()
 		-- Initialize the trace with rejection sampling
 		while not self.conditionsSatisfied do
 			-- Clear out the existing vars
@@ -412,9 +409,6 @@ RandExecTrace = templatize(function(ProbType, computation)
 	Trace.__templatecopy = templatize(function(P)
 		return terra(self: &Trace, other: &RandExecTrace(P, computation))
 			[ParentClass.__templatecopy(P)](self, other)
-			-- IMPORTANT: initialize the virtual template vtable!
-			self:init_traceUpdateVtable()
-			self:init_deepcopyVtable()
 		end
 	end)
 

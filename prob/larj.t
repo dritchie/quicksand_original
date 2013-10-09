@@ -148,9 +148,6 @@ InterpolationTrace = templatize(function(ProbType)
 	-- NOTE: This assumes ownership of t1 and t2
 	terra InterpolationTraceT:__construct(t1: &GlobalTraceT, t2: &GlobalTraceT)
 		BaseTraceT.__construct(self)
-		-- IMPORTANT: initialize the virtual template vtable!
-		self:init_traceUpdateVtable()
-		self:init_deepcopyVtable()
 		-- Setup other stuff
 		self.trace1 = t1
 		self.trace2 = t2
@@ -163,9 +160,6 @@ InterpolationTrace = templatize(function(ProbType)
 		local BaseTraceP = BaseTrace(P)
 		return terra(self: &InterpolationTraceT, other: &InterpolationTrace(P))
 			[BaseTraceT.__templatecopy(P)](self, other)
-			-- IMPORTANT: initialize the virtual template vtable!
-			self:init_traceUpdateVtable()
-			self:init_deepcopyVtable()
 			self.trace1 = [&GlobalTraceT]([BaseTraceP.deepcopy(ProbType)](other.trace1))
 			self.trace2 = [&GlobalTraceT]([BaseTraceP.deepcopy(ProbType)](other.trace2))
 			self.alpha = other.alpha
@@ -328,7 +322,7 @@ m.addConstructors(LARJKernel)
 -- Convenience method for generating LARJ Multi-kernels (i.e. kernels that sometimes
 --    do LARJ steps and other times do diffusion steps)
 -- Can specify separate generators for diffusion and annealing kernels, but defaults to
---    using the same kernel for both if only one is specified.
+--    using the same type kernel for both if only one is specified.
 local function LARJ(diffKernelGen, annealKernelGen)
 	assert(diffKernelGen)
 	annealKernelGen = annealKernelGen or diffKernelGen

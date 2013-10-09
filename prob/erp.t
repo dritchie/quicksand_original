@@ -293,7 +293,6 @@ local function createRandVarFromCallsite(scalarType, sample, logprobfn, propose,
 		local self = syms[1]
 		local def = terra([syms])
 			ctor([syms])
-			self:init_deepcopyVtable()
 		end
 		if not newctor then newctor = def else newctor:adddefinition(def:getdefinitions()[1]) end
 	end
@@ -304,7 +303,6 @@ local function createRandVarFromCallsite(scalarType, sample, logprobfn, propose,
 		local RandVarFromCallsiteP = RandVarFromCallsite(P, computation, id)
 		return terra(self: &RandVarFromCallsiteT, other: &RandVarFromCallsiteP)
 			[ParentClass.__templatecopy(P, unpack(RandVarFromCallsiteP.paramTypes))](self, other)
-			self:init_deepcopyVtable()
 		end
 	end)
 
