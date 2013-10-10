@@ -3,6 +3,7 @@ local templatize = terralib.require("templatize")
 local virtualTemplate = terralib.require("vtemplate")
 local ad = terralib.require("ad")
 local spec = terralib.require("prob.specialize")
+local Vector = terralib.require("vector")
 
 local C = terralib.includecstring [[
 #include <stdio.h>
@@ -47,6 +48,8 @@ RandVar = templatize(function(ProbType)
 	inheritance.purevirtual(RandVarT, "pointerToValue", {}->{&opaque})
 	inheritance.purevirtual(RandVarT, "proposeNewValue", {}->{ProbType,ProbType})
 	inheritance.purevirtual(RandVarT, "setValue", {&opaque}->{})
+	inheritance.purevirtual(RandVarT, "getRealComponents", {&Vector(ProbType)}->{})
+	inheritance.purevirtual(RandVarT, "setRealComponents", {&Vector(ProbType), &uint}->{})
 
 	RandVarT.deepcopy = virtualTemplate(RandVarT, "deepcopy", function(P) return {}->{&RandVar(P)} end)
 

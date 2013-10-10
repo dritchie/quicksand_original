@@ -11,6 +11,7 @@ local RandVar = erph.RandVar
 local typeToID = erph.typeToID
 local trace = terralib.require("prob.trace")
 local spec = terralib.require("prob.specialize")
+local ad = terralib.require("ad")
 
 
 -- Every random variable has some value type; this intermediate
@@ -54,6 +55,62 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 		return [&opaque](&self.value)
 	end
 	inheritance.virtual(RandVarWithValT, "pointerToValue")
+
+
+	-- By default, we understand how to get/set the real components of double, ad.num,
+	--    Vector(double), and Vector(ad.num). Any other value types must define the
+	--    'getRealComponents' and 'setRealComponents' methods--otherwise, they'll be
+	--    treated as having no real components.
+	local hasRealComponents = (ValType == double or ValType == ad.num or
+							   ValType == Vector(double) or ValType == Vector(ad.num) or
+							   ValType:getmethod("setRealComponents"))
+	local function genGetReals(self, comps)
+		if ValType == double or ValType == ad.num then
+			return quote
+				comps:push(self.value)
+			end
+		elseif ValType == Vector(double) or ValType == Vector(ad.num) then
+			return quote
+				for i=0,self.value.size do
+					comps:push(self.value:get(i))
+				end
+			end
+		elseif ValType:getmethod("getRealComponents") then
+			return quote
+				self.value:getRealComponents(comps)
+			end
+		end
+	end
+	local function genSetReals(self, comps, index)
+		if ValType == double or ValType == ad.num then
+			return quote
+				self.value = comps:get(@index)
+				@index = @index + 1
+			end
+		elseif ValType == Vector(double) or ValType == Vector(ad.num) then
+			return quote
+				for i=0,self.value.size do
+					self.value:set(i, comps:get(@index+i))
+				end
+				@index = @index + self.value.size
+			end
+		elseif ValType:getmethod("setRealComponents") then
+			return quote
+				self.value:setRealComponents(comps, index)
+			end
+		end
+	end
+
+	terra RandVarWithValT:getRealComponents(comps: &Vector(ProbType))
+		[genGetReals(self, comps)]
+	end
+	inheritance.virtual(RandVarWithValT, "getRealComponents")
+
+	terra RandVarWithValT:setRealComponents(comps: &Vector(ProbType), index: &uint)
+		[genSetReals(self, comps, index)]
+		[hasRealComponents and (quote self:updateLogprob() end) or (quote end)]
+	end
+	inheritance.virtual(RandVarWithValT, "setRealComponents")
 
 	return RandVarWithValT
 end)
