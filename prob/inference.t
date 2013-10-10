@@ -92,7 +92,7 @@ terra RandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	-- If there are no free variables, then simply run the computation
 	-- unmodified (nested query can make this happen)
 	if numvars == 0 then
-		[trace.traceUpdate(currTrace)]
+		[trace.traceUpdate()](currTrace)
 	-- Otherwise, do an MH proposal
 	else
 		nextTrace = currTrace:deepcopy()
@@ -100,9 +100,9 @@ terra RandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 		var v = freevars:get(rand.uniformRandomInt(0, freevars.size))
 		var fwdPropLP, rvsPropLP = v:proposeNewValue()
 		if v.isStructural then
-			[trace.traceUpdate(nextTrace)]
+			[trace.traceUpdate()](nextTrace)
 		else
-			[trace.traceUpdate(nextTrace, {structureChange=false})]
+			[trace.traceUpdate({structureChange=false})](nextTrace)
 		end
 		if nextTrace.newlogprob ~= 0.0 or nextTrace.oldlogprob ~= 0.0 then
 			var oldNumVars = numvars
@@ -188,7 +188,7 @@ terra ADRandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	var freevars = nextTrace:freeVars(false, true)
 	var v = freevars:get(rand.uniformRandomInt(0, freevars.size))
 	var fwdPropLP, rvsPropLP = v:proposeNewValue()
-	[trace.traceUpdate(nextTrace, {structureChange=false})]
+	[trace.traceUpdate({structureChange=false})](nextTrace)
 	var acceptThresh = nextTrace.logprob - currTrace.logprob + rvsPropLP - fwdPropLP
 	if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
 		self.proposalsAccepted = self.proposalsAccepted + 1
@@ -202,7 +202,7 @@ terra ADRandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 		end
 		-- Reconstruct return value by running a traceUpdate
 		-- (No need to evaluate any factors)
-		[trace.traceUpdate(currTrace, {structureChange=false, factorEval=false})]
+		[trace.traceUpdate({structureChange=false, factorEval=false})](currTrace)
 		-- Set the final logprob (since we didn't evaluate factors)
 		currTrace.logprob = nextlp
 		m.delete(nextTrace)

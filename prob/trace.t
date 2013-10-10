@@ -198,17 +198,16 @@ end)
 local traceUpdateImpl = templatize(function(ProbType)
 	return virtualTemplate(BaseTrace(ProbType), "traceUpdate", function(...) return {}->{} end)
 end)
-local function traceUpdate(inst, paramTable)
+local function traceUpdate(paramTable)
 	paramTable = paramTable or {}
 	paramTable.doingInference = true
-	local m = macro(function(inst)
+	return macro(function(inst)
 		local TraceType = inst:gettype().type
 		-- ProbType is the first template parameter
 		local ProbType = TraceType.__templateParams[1]
 		paramTable.scalarType = ProbType
 		return `[traceUpdateImpl(ProbType)(unpack(spec.paramTableToList(paramTable)))](inst)
 	end)
-	return `m(inst)
 end
 
 
@@ -402,7 +401,7 @@ RandExecTrace = templatize(function(ProbType, computation)
 			end])
 			self.vars:clear()
 			-- Run the program forward
-			[traceUpdate(self)]
+			[traceUpdate()](self)
 		end
 	end
 

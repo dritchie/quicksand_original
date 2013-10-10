@@ -61,7 +61,7 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 	--    Vector(double), and Vector(ad.num). Any other value types must define the
 	--    'getRealComponents' and 'setRealComponents' methods--otherwise, they'll be
 	--    treated as having no real components.
-	local hasRealComponents = (ValType == double or ValType == ad.num or
+	RandVarWithValT.HasRealComponents = (ValType == double or ValType == ad.num or
 							   ValType == Vector(double) or ValType == Vector(ad.num) or
 							   ValType:getmethod("setRealComponents"))
 	local function genGetReals(self, comps)
@@ -101,14 +101,16 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 		end
 	end
 
-	terra RandVarWithValT:getRealComponents(comps: &Vector(ProbType))
+	terra RandVarWithValT:getRealComponents(comps: &Vector(ProbType)) : {}
 		[genGetReals(self, comps)]
 	end
 	inheritance.virtual(RandVarWithValT, "getRealComponents")
 
-	terra RandVarWithValT:setRealComponents(comps: &Vector(ProbType), index: &uint)
+	terra RandVarWithValT:setReals(comps: &Vector(ProbType), index: &uint)
 		[genSetReals(self, comps, index)]
-		[hasRealComponents and (quote self:updateLogprob() end) or (quote end)]
+	end
+	terra RandVarWithValT:setRealComponents(comps: &Vector(ProbType), index: &uint) : {}
+		self:setReals(comps, index)
 	end
 	inheritance.virtual(RandVarWithValT, "setRealComponents")
 
@@ -297,6 +299,13 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		self:updateLogprob()
 	end
 	inheritance.virtual(RandVarFromFunctionsT, "setValue")
+
+	-- Setting real components may require us to update the logprob.
+	terra RandVarFromFunctionsT:setRealComponents(comps: &Vector(ProbType), index: &uint) : {}
+		ParentClass.setReals(self, comps, index)
+		[ParentClass.HasRealComponents and (quote self:updateLogprob() end) or (quote end)]
+	end
+	inheritance.virtual(RandVarFromFunctionsT, "setRealComponents")
 
 	m.addConstructors(RandVarFromFunctionsT)
 	return RandVarFromFunctionsT

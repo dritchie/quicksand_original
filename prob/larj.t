@@ -73,8 +73,23 @@ local InterpolationRandVar = templatize(function(ProbType)
 	terra InterpolationRandVarT:setValue(valptr: &opaque) : {}
 		self.rv1:setValue(valptr)
 		self.rv2:setValue(valptr)
+		self.logprob = self.rv1.logprob
 	end
 	inheritance.virtual(InterpolationRandVarT, "setValue")
+
+	terra InterpolationRandVarT:getRealComponents(comps: &Vector(ProbType)) : {}
+		self.rv1:getRealComponents(comps)
+	end
+	inheritance.virtual(InterpolationRandVarT, "getRealComponents")
+
+	terra InterpolationRandVarT:setRealComponents(comps: &Vector(ProbType), index: &uint) : {}
+		var i = @index
+		self.rv1:setRealComponents(comps, index)
+		@index = i
+		self.rv2:setRealComponents(comps, index)
+		self.logprob = self.rv1.logprob
+	end
+	inheritance.virtual(InterpolationRandVarT, "setRealComponents")
 
 	m.addConstructors(InterpolationRandVarT)
 	return InterpolationRandVarT
@@ -207,8 +222,8 @@ InterpolationTrace = templatize(function(ProbType)
 		return terra(self: &InterpolationTraceT) : {}
 			var t1 = self.trace1
 			var t2 = self.trace2
-			[trace.traceUpdate(t1, paramtable)]
-			[trace.traceUpdate(t2, paramtable)]
+			[trace.traceUpdate(paramtable)](t1)
+			[trace.traceUpdate(paramtable)](t2)
 			self:updateLPCond()
 		end
 	end)
@@ -264,7 +279,7 @@ terra LARJKernel:next(currTrace: &BaseTraceD)  : &BaseTraceD
 	var freevars = newStructTrace:freeVars(true, false)
 	var v = freevars:get(rand.uniformRandomInt(0, freevars.size))
 	var fwdPropLP, rvsPropLP = v:proposeNewValue()
-	[trace.traceUpdate(newStructTrace)]
+	[trace.traceUpdate()](newStructTrace)
 	var oldNumStructVars = freevars.size
 	var newNumStructVars = newStructTrace:numFreeVars(true, false)
 	fwdPropLP = fwdPropLP + newStructTrace.newlogprob - C.log(oldNumStructVars)

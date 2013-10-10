@@ -8,13 +8,16 @@ local BaseTraceD = trace.BaseTrace(double)
 local BaseTraceAD = trace.BaseTrace(ad.num)
 local erp = terralib.require("prob.erph")
 local RandVarAD = erp.RandVar(ad.num)
+local rand = terralib.require("prob.random")
+local Vector = terralib.require("vector")
 
+local C = terralib.includecstring [[
+#include <stdio.h>
+]]
 
 
 -- Kernel for doing Hamiltonian Monte Carlo proposals
 -- Only makes proposals to non-structural variables
--- TODO: lots of places where we can save intermediate variables between calls
---    to 'next' to avoid computation (by detecting that the trace is the same.)
 -- TODO: automatically adapt step size? (dual averaging scheme from Stan)
 -- TODO: variable mass adjustment based on LARJ annealing schedule
 local struct HMCKernel
@@ -22,7 +25,16 @@ local struct HMCKernel
 	stepSize: double,
 	numSteps: uint,
 	proposalsMade: uint,
-	proposalsAccepted: uint
+	proposalsAccepted: uint,
+
+	-- Intermediates that we keep around for efficiency
+	lastTrace: &BaseTraceD,
+	positions: Vector(double),
+	momenta: Vector(double),
+	gradient: Vector(double),
+	adTrace: &BaseTraceAD,
+	adVars: Vector(&RandVarAD),
+	indepVarNums: Vector(ad.num)
 }
 inheritance.dynamicExtend(MCMCKernel, HMCKernel)
 
@@ -31,56 +43,122 @@ terra HMCKernel:__construct(stepSize: double, numSteps: uint)
 	self.numSteps = numSteps
 	self.proposalsMade = 0
 	self.proposalsAccepted = 0
+	self.lastTrace = nil
+	self.positions = [Vector(double)].stackAlloc()
+	self.momenta = [Vector(double)].stackAlloc()
+	self.gradient = [Vector(double)].stackAlloc()
+	self.adTrace = nil
+	m.init(self.adVars)
+	m.init(self.indepVarNums)
 end
 
-terra HMCKernel:__destruct() : {} end
+terra HMCKernel:__destruct() : {}
+	m.destruct(self.positions)
+	m.destruct(self.momenta)
+	m.destruct(self.gradient)
+	if self.adTrace ~= nil then m.delete(self.adTrace) end
+	m.destruct(self.adVars)
+	m.destruct(self.indepVarNums)
+end
 inheritance.virtual(HMCKernel, "__destruct")
 
-terra logProbAndGrad(workTrace: &BaseTraceAD, vars: &Vector(&RandVarAD), reals: &Vector(double), grad: &Vector(double))
-	var indeps = [Vector(ad.num)].stackAlloc(reals.size, 0.0)
-	for i=0,reals.size do
-		indeps:set(i, ad.num(reals:get(i)))
+terra HMCKernel:logProbAndGrad()
+	self.indepVarNums:resize(self.positions.size)
+	for i=0,self.positions.size do
+		self.indepVarNums:set(i, ad.num(self.positions:get(i)))
 	end
-	var index = 0
-	for i=0,vars.size do
-		vars:get(i):setRealComponents(&indeps, &index)
+	var index = 0U
+	for i=0,self.adVars.size do
+		self.adVars:get(i):setRealComponents(&self.indepVarNums, &index)
 	end
-	[trace.traceUpdate(workTrace, {structureChange=false})]
-	var lp = workTrace.logprob:val()
-	workTrace.logprob:grad(&indeps, grad)
-	m.destruct(indeps)
+	[trace.traceUpdate({structureChange=false})](self.adTrace)
+	var lp = self.adTrace.logprob:val()
+	self.adTrace.logprob:grad(&self.indepVarNums, &self.gradient)
 	return lp
 end
 
--- TODO: The updates in this function are a good candidate for vectorized multiply/add...
-terra HMCKernel:leapfrog(workTrace: &BaseTraceAD, vars: &Vector(&RandVarAD), reals: &Vector(double))
-	var grad = [Vector(double)].stackAlloc()
+-- TODO: The updates in this function are a good candidate for vectorized multiply/add.
+terra HMCKernel:leapfrog()
 	var lp : double
 	for s=0,self.numSteps do
-		lp = logProbAndGrad(workTrace, vars, reals, &grad)
-		-- TODO: FINISH! (need momentum variables, too...)
+		-- Momentum update (first half)
+		lp = self:logProbAndGrad()
+		for i=0,self.momenta.size do
+			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*self.gradient:get(i))
+		end
+		-- Position update
+		for i=0,self.positions.size do
+			self.positions:set(i, self.positions:get(i) + self.stepSize*self.momenta:get(i))
+		end
+		-- Momentum update (second half)
+		lp = self:logProbAndGrad()
+		for i=0,self.momenta.size do
+			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*self.gradient:get(i))
+		end
 	end
-	m.destruct(grad)
+	return lp
+end
+
+terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
+	-- Get the real components of currTrace variables
+	self.positions:clear()
+	var currVars = currTrace:freeVars(false, true)
+	for i=0,currVars.size do
+		currVars:get(i):getRealComponents(&self.positions)
+	end
+	m.destruct(currVars)
+
+	-- Create an AD trace that we can use for calculations
+	-- Also remember the nonstructural variables
+	if self.adTrace ~= nil then m.delete(self.adTrace) end
+	self.adTrace = [BaseTraceD.deepcopy(ad.num)](currTrace)
+	m.destruct(self.adVars)
+	self.adVars = self.adTrace:freeVars(false, true)
+
+	-- Remember that this is the last trace we saw, so we can
+	--    avoid doing all this work if this kernel is repeatedly
+	--    called (and it will be).
+	self.lastTrace = currTrace
 end
 
 terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	self.proposalsMade = self.proposalsMade + 1
-	var nextTrace = [BaseTraceD.deepcopy(ad.num)](currTrace)
-	-- Get the real components of currTrace variables
-	var reals = [Vector(double)].stackAlloc()
-	var currVars = currTrace:freeVars(false, true)
-	for i=0,currVars.size do
-		currVars:get(i):getRealComponents(&reals)
+	if currTrace ~= self.lastTrace then
+		self:initWithNewTrace(currTrace)
 	end
-	m.destruct(currVars)
 
-	-- Do an HMC step on them
-	var newVars = newTrace:freeVars(false, true)
-	-- TODO: FINISH!
+	-- Sample momentum variables
+	self.momenta:resize(self.positions.size)
+	for i=0,self.momenta.size do self.momenta:set(i, [rand.gaussian_sample(double)](0.0, 1.0)) end
 
-	m.destruct(newVars)
-	m.destruct(reals)
+	-- Initial Hamiltonian
+	var H = 0.0
+	for i=0,self.momenta.size do H = H + self.momenta:get(i)*self.momenta:get(i) end
+	H = -0.5*H + currTrace.logprob 
 
+	-- Do an HMC step
+	var finallp = self:leapfrog()
+
+	-- Final Hamiltonian
+	var H_new = 0.0
+	for i=0,self.momenta.size do H_new = H_new + self.momenta:get(i)*self.momenta:get(i) end
+	H_new = -0.5*H_new + finallp
+
+	-- Accept/reject test
+	if ad.math.log(rand.random()) < H_new - H then
+		self.proposalsAccepted = self.proposalsAccepted + 1
+		-- Copy final reals back into currTrace, flush trace to reconstruct
+		-- return value
+		var index = 0U
+		var currVars = currTrace:freeVars(false, true)
+		for i=0,currVars.size do
+			currVars:get(i):setRealComponents(&self.positions, &index)
+		end
+		m.destruct(currVars)
+		[trace.traceUpdate({structureChange=false, factorEval=false})](currTrace)
+	end
+
+	return currTrace
 end
 inheritance.virtual(HMCKernel, "next")
 
@@ -105,3 +183,16 @@ local HMC = inf.makeKernelGenerator(
 	end,
 	-- No way to provide a meaningful default step size...
 	{numSteps = 1})
+
+
+
+
+
+return
+{
+	globals = { HMC = HMC }
+}
+
+
+
+

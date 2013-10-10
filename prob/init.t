@@ -30,4 +30,10 @@ local function processModules(...)
 	for i=1,select("#",...) do processModule((select(i,...))) end
 end
 
-processModules("erph", "erp", "trace", "inference", "memoize", "larj")
+processModules("erph",
+			   "erp",
+			   "trace",
+			   "inference",
+			   "memoize",
+			   "larj",
+			   "hmc")
