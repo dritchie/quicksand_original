@@ -30,8 +30,8 @@ local struct HMCKernel
 	-- Intermediates that we keep around for efficiency
 	lastTrace: &BaseTraceD,
 	positions: Vector(double),
-	momenta: Vector(double),
 	gradient: Vector(double),
+	momenta: Vector(double),
 	adTrace: &BaseTraceAD,
 	adVars: Vector(&RandVarAD),
 	indepVarNums: Vector(ad.num)
@@ -45,8 +45,8 @@ terra HMCKernel:__construct(stepSize: double, numSteps: uint)
 	self.proposalsAccepted = 0
 	self.lastTrace = nil
 	self.positions = [Vector(double)].stackAlloc()
-	self.momenta = [Vector(double)].stackAlloc()
 	self.gradient = [Vector(double)].stackAlloc()
+	self.momenta = [Vector(double)].stackAlloc()
 	self.adTrace = nil
 	m.init(self.adVars)
 	m.init(self.indepVarNums)
@@ -62,10 +62,10 @@ terra HMCKernel:__destruct() : {}
 end
 inheritance.virtual(HMCKernel, "__destruct")
 
-terra HMCKernel:logProbAndGrad()
-	self.indepVarNums:resize(self.positions.size)
-	for i=0,self.positions.size do
-		self.indepVarNums:set(i, ad.num(self.positions:get(i)))
+terra HMCKernel:logProbAndGrad(pos: &Vector(double), grad: &Vector(double))
+	self.indepVarNums:resize(pos.size)
+	for i=0,pos.size do
+		self.indepVarNums:set(i, ad.num(pos:get(i)))
 	end
 	var index = 0U
 	for i=0,self.adVars.size do
@@ -73,27 +73,27 @@ terra HMCKernel:logProbAndGrad()
 	end
 	[trace.traceUpdate({structureChange=false})](self.adTrace)
 	var lp = self.adTrace.logprob:val()
-	self.adTrace.logprob:grad(&self.indepVarNums, &self.gradient)
+	self.adTrace.logprob:grad(&self.indepVarNums, grad)
 	return lp
 end
 
 -- TODO: The updates in this function are a good candidate for vectorized multiply/add.
-terra HMCKernel:leapfrog()
+terra HMCKernel:leapfrog(pos: &Vector(double), grad: &Vector(double))
 	var lp : double
 	for s=0,self.numSteps do
 		-- Momentum update (first half)
-		lp = self:logProbAndGrad()
+		lp = self:logProbAndGrad(pos, grad)
 		for i=0,self.momenta.size do
-			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*self.gradient:get(i))
+			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
 		end
 		-- Position update
-		for i=0,self.positions.size do
-			self.positions:set(i, self.positions:get(i) + self.stepSize*self.momenta:get(i))
+		for i=0,pos.size do
+			pos:set(i, pos:get(i) + self.stepSize*self.momenta:get(i))
 		end
 		-- Momentum update (second half)
-		lp = self:logProbAndGrad()
+		lp = self:logProbAndGrad(pos, grad)
 		for i=0,self.momenta.size do
-			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*self.gradient:get(i))
+			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
 		end
 	end
 	return lp
@@ -114,6 +114,9 @@ terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
 	self.adTrace = [BaseTraceD.deepcopy(ad.num)](currTrace)
 	m.destruct(self.adVars)
 	self.adVars = self.adTrace:freeVars(false, true)
+
+	-- Initialize the gradient
+	self:logProbAndGrad(&self.positions, &self.gradient)
 
 	-- Remember that this is the last trace we saw, so we can
 	--    avoid doing all this work if this kernel is repeatedly
@@ -137,16 +140,22 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	H = -0.5*H + currTrace.logprob 
 
 	-- Do an HMC step
-	var finallp = self:leapfrog()
+	var pos = m.copy(self.positions)
+	var grad = m.copy(self.gradient)
+	var newlp = self:leapfrog(&pos, &grad)
 
 	-- Final Hamiltonian
 	var H_new = 0.0
 	for i=0,self.momenta.size do H_new = H_new + self.momenta:get(i)*self.momenta:get(i) end
-	H_new = -0.5*H_new + finallp
+	H_new = -0.5*H_new + newlp
 
 	-- Accept/reject test
 	if ad.math.log(rand.random()) < H_new - H then
 		self.proposalsAccepted = self.proposalsAccepted + 1
+		m.destruct(self.positions)
+		m.destruct(self.gradient)
+		self.positions = pos
+		self.gradient = grad
 		-- Copy final reals back into currTrace, flush trace to reconstruct
 		-- return value
 		var index = 0U
@@ -156,6 +165,7 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 		end
 		m.destruct(currVars)
 		[trace.traceUpdate({structureChange=false, factorEval=false})](currTrace)
+		currTrace.logprob = newlp
 	end
 
 	return currTrace
