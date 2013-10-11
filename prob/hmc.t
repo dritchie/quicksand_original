@@ -82,7 +82,6 @@ terra HMCKernel:leapfrog(pos: &Vector(double), grad: &Vector(double))
 	var lp : double
 	for s=0,self.numSteps do
 		-- Momentum update (first half)
-		lp = self:logProbAndGrad(pos, grad)
 		for i=0,self.momenta.size do
 			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
 		end
@@ -97,6 +96,11 @@ terra HMCKernel:leapfrog(pos: &Vector(double), grad: &Vector(double))
 		end
 	end
 	return lp
+end
+
+terra HMCKernel:sampleMomenta()
+	self.momenta:resize(self.positions.size)
+	for i=0,self.momenta.size do self.momenta:set(i, [rand.gaussian_sample(double)](0.0, 1.0)) end
 end
 
 terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
@@ -131,8 +135,7 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	end
 
 	-- Sample momentum variables
-	self.momenta:resize(self.positions.size)
-	for i=0,self.momenta.size do self.momenta:set(i, [rand.gaussian_sample(double)](0.0, 1.0)) end
+	self:sampleMomenta()
 
 	-- Initial Hamiltonian
 	var H = 0.0
@@ -191,7 +194,6 @@ local HMC = inf.makeKernelGenerator(
 	terra(stepSize: double, numSteps: uint)
 		return HMCKernel.heapAlloc(stepSize, numSteps)
 	end,
-	-- No way to provide a meaningful default step size...
 	{numSteps = 1})
 
 
