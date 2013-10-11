@@ -192,7 +192,6 @@ terra ADRandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	var acceptThresh = nextTrace.logprob - currTrace.logprob + rvsPropLP - fwdPropLP
 	if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
 		self.proposalsAccepted = self.proposalsAccepted + 1
-		var nextlp = nextTrace.logprob:val()
 		-- Copy values back into currTrace
 		var oldfreevars = currTrace:freeVars(false, true)
 		for i=0,oldfreevars.size do
@@ -204,11 +203,9 @@ terra ADRandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 		-- (No need to evaluate any factors)
 		[trace.traceUpdate({structureChange=false, factorEval=false})](currTrace)
 		-- Set the final logprob (since we didn't evaluate factors)
-		currTrace.logprob = nextlp
-		m.delete(nextTrace)
-	else
-		m.delete(nextTrace)
+		[BaseTraceD.setLogprobFrom(ad.num)](currTrace, nextTrace)
 	end
+	m.delete(nextTrace)
 	m.destruct(freevars)
 	return currTrace
 end

@@ -165,7 +165,7 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 		end
 		m.destruct(currVars)
 		[trace.traceUpdate({structureChange=false, factorEval=false})](currTrace)
-		currTrace.logprob = newlp
+		[BaseTraceD.setLogprobFrom(ad.num)](currTrace, self.adTrace)
 	end
 
 	return currTrace

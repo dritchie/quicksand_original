@@ -228,6 +228,23 @@ InterpolationTrace = templatize(function(ProbType)
 		end
 	end)
 
+	virtualTemplate(InterpolationTraceT, "setLogprobFrom", function(P) return {&BaseTrace(P)}->{} end,
+	function(P)
+		local val = macro(function(x)
+			if P == ad.num and ProbType ~= P then
+				return `x:val()
+			else
+				return x
+			end
+		end)
+		return terra(self: &InterpolationTraceT, other: &BaseTrace(P))
+			var otherDyn = [&InterpolationTrace(P)](other)
+			self.logprob = val(other.logprob)
+			self.rv1.logprob = val(other.rv1.logprob)
+			self.rv2.logprob = val(other.rv2.logprob)
+		end
+	end)
+
 	terra InterpolationTraceT:releaseSubtraces()
 		var t1, t2 = self.trace1, self.trace2
 		self.trace1 = nil

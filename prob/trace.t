@@ -10,6 +10,7 @@ local inheritance = terralib.require("inheritance")
 local m = terralib.require("mem")
 local rand = terralib.require("prob.random")
 local spec = terralib.require("prob.specialize")
+local ad = terralib.require("ad")
 
 local C = terralib.includecstring [[
 #include <stdio.h>
@@ -186,6 +187,8 @@ BaseTrace = templatize(function(ProbType)
 	end
 
 	BaseTraceT.traceUpdate = virtualTemplate(BaseTraceT, "traceUpdate", function(...) return {}->{} end)
+
+	BaseTraceT.setLogprobFrom = virtualTemplate(BaseTraceT, "setLogprobFrom", function(P) return {&BaseTrace(P)}->{} end)
 
 	m.addConstructors(BaseTraceT)
 	return BaseTraceT
@@ -500,6 +503,20 @@ RandExecTrace = templatize(function(ProbType, computation)
 
 			-- Reset the global trace data
 			globTrace = prevtrace
+		end
+	end)
+
+	virtualTemplate(Trace, "setLogprobFrom", function(P) return {&BaseTrace(P)}->{} end,
+	function(P)
+		local val = macro(function(x)
+			if P == ad.num and ProbType ~= P then
+				return `x:val()
+			else
+				return x
+			end
+		end)
+		return terra(self: &Trace, other: &BaseTrace(P))
+			self.logprob = val(other.logprob)
 		end
 	end)
 
