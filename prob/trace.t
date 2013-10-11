@@ -188,7 +188,7 @@ local traceUpdateImpl = virtualTemplate(BaseTrace, "traceUpdate", function(...) 
 local function traceUpdate(inst, paramTable)
 	paramTable = paramTable or {}
 	paramTable.doingInference = true
-	return `[traceUpdateImpl(inst, unpack(spec.paramTableToList(paramTable)))]()
+	return `[traceUpdateImpl(unpack(spec.paramTableToList(paramTable)))](inst)
 end
 
 
@@ -357,8 +357,6 @@ local RandExecTrace = templatize(function(computation)
 
 	terra Trace:__construct()
 		GlobalTrace.__construct(self)
-		-- IMPORTANT: initialize the virtual template vtable!
-		self:init_traceUpdateVtable()
 		-- Initialize the trace with rejection sampling
 		while not self.conditionsSatisfied do
 			-- Clear out the existing vars
@@ -375,8 +373,6 @@ local RandExecTrace = templatize(function(computation)
 
 	terra Trace:__copy(trace: &Trace)
 		GlobalTrace.__copy(self, trace)
-		-- IMPORTANT: initialize the virtual template vtable!
-		self:init_traceUpdateVtable()
 		self.returnValue = m.copy(trace.returnValue)
 	end
 

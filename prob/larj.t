@@ -135,8 +135,6 @@ end
 
 terra InterpolationTrace:__construct(t1: &GlobalTrace, t2: &GlobalTrace)
 	BaseTrace.__construct(self)
-	-- IMPORTANT: initialize the virtual template vtable!
-	self:init_traceUpdateVtable()
 	-- Setup other stuff
 	self.trace1 = t1
 	self.trace2 = t2
@@ -147,8 +145,6 @@ end
 
 terra InterpolationTrace:__copy(trace: &InterpolationTrace)
 	BaseTrace.__copy(self, trace)
-	-- IMPORTANT: initialize the virtual template vtable!
-	self:init_traceUpdateVtable()
 	self.trace1 = [&GlobalTrace](trace.trace1:deepcopy())
 	self.trace2 = [&GlobalTrace](trace.trace2:deepcopy())
 	self.alpha = trace.alpha
