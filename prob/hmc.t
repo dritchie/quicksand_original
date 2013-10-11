@@ -17,6 +17,55 @@ local C = terralib.includecstring [[
 ]]
 
 
+-- Univariate dual-averaging optimization (for HMC step size adaptation)
+-- Adapted from Stan
+local struct DualAverage
+{
+	gbar: double,
+	xbar: double,
+	x0: double,
+	lastx: double,
+	k: int,
+	gamma: double,
+	adapting: bool,
+	minChange: double
+}
+
+terra DualAverage:__construct(x0: double, gamma: double, minChange: double) : {}
+	self.k = 0
+	self.x0 = x0
+	self.lastx = x0
+	self.gbar = 0.0
+	self.xbar = 0.0
+	self.gamma = gamma
+	self.adapting = true
+	self.minChange = minChange
+end
+
+terra DualAverage:__construct(x0: double, gamma: double) : {}
+	DualAverage.__construct(self, x0, gamma, 0.0001)
+end
+
+terra DualAverage:update(g: double)
+	if self.adapting then
+		self.k = self.k + 1
+		var avgeta = 1.0 / (self.k + 10)
+		var xbar_avgeta = ad.math.pow(self.k, -0.75)
+		var muk = 0.5 * ad.math.sqrt(self.k) / self.gamma
+		self.gbar = avgeta*g + (1-avgeta)*self.gbar
+		self.lastx = self.x0 - muk*self.gbar
+		var oldxbar = self.xbar
+		self.xbar = xbar_avgeta*self.lastx + (1-xbar_avgeta)*self.xbar
+		if ad.math.fabs(oldxbar - self.xbar) < self.minChange then
+			self.adapting = false
+		end
+	end
+	return self.xbar
+end
+
+m.addConstructors(DualAverage)
+
+
 -- Kernel for doing Hamiltonian Monte Carlo proposals
 -- Only makes proposals to non-structural variables
 -- TODO: automatically adapt step size? (dual averaging scheme from Stan)
@@ -25,6 +74,10 @@ local struct HMCKernel
 {
 	stepSize: double,
 	numSteps: uint,
+	stepSizeAdapt: bool,
+	targetAcceptRate: double,
+	adaptationRate: double, 
+	adapter: &DualAverage,
 	proposalsMade: uint,
 	proposalsAccepted: uint,
 
@@ -39,9 +92,14 @@ local struct HMCKernel
 }
 inheritance.dynamicExtend(MCMCKernel, HMCKernel)
 
-terra HMCKernel:__construct(stepSize: double, numSteps: uint)
+terra HMCKernel:__construct(stepSize: double, numSteps: uint, stepSizeAdapt: bool,
+							targetAcceptRate: double, adaptationRate: double)
 	self.stepSize = stepSize
 	self.numSteps = numSteps
+	self.stepSizeAdapt = stepSizeAdapt
+	self.targetAcceptRate = targetAcceptRate
+	self.adaptationRate = adaptationRate
+	self.adapter = nil
 	self.proposalsMade = 0
 	self.proposalsAccepted = 0
 	self.lastTrace = nil
@@ -60,6 +118,7 @@ terra HMCKernel:__destruct() : {}
 	if self.adTrace ~= nil then m.delete(self.adTrace) end
 	m.destruct(self.adVars)
 	m.destruct(self.indepVarNums)
+	if self.adapter ~= nil then m.delete(self.adapter) end
 end
 inheritance.virtual(HMCKernel, "__destruct")
 
@@ -148,6 +207,17 @@ terra HMCKernel:searchForStepSize()
 	m.destruct(grad)
 end
 
+-- Code adapted from Stan
+terra HMCKernel:updateAdaptiveStepSize(dH: double)
+	var EdH = ad.math.exp(dH)
+	if EdH > 1.0 then EdH = 1.0 end
+	-- Supress NaNs
+	if EdH ~= EdH then EdH = 0.0 end
+	var adaptGrad = self.targetAcceptRate - EdH
+	-- Dual averaging
+	self.stepSize = self.adapter:update(adaptGrad)
+end
+
 terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
 	-- Get the real components of currTrace variables
 	self.positions:clear()
@@ -170,6 +240,11 @@ terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
 	-- If the stepSize wasn't specified, try to find a decent one.
 	if self.stepSize <= 0.0 then
 		self:searchForStepSize()
+	end
+
+	-- Initialize the stepsize adapter, if we're doing adaptation
+	if self.stepSizeAdapt then
+		self.adapter = DualAverage.heapAlloc(self.stepSize, self.adaptationRate)
 	end
 
 	-- Remember that this is the last trace we saw, so we can
@@ -205,8 +280,15 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	for i=0,self.momenta.size do H_new = H_new + self.momenta:get(i)*self.momenta:get(i) end
 	H_new = -0.5*H_new + newlp
 
+	var dH = H_new - H
+
+	-- Update step size, if we're doing adaptive step sizes
+	if self.stepSizeAdapt and self.adapter.adapting then
+		self:updateAdaptiveStepSize(dH)
+	end
+
 	-- Accept/reject test
-	if ad.math.log(rand.random()) < H_new - H then
+	if ad.math.log(rand.random()) < dH then
 		self.proposalsAccepted = self.proposalsAccepted + 1
 		m.destruct(self.positions)
 		m.destruct(self.gradient)
@@ -244,10 +326,13 @@ m.addConstructors(HMCKernel)
 
 -- Convenience method for generating new HMCKernels
 local HMC = inf.makeKernelGenerator(
-	terra(stepSize: double, numSteps: uint)
-		return HMCKernel.heapAlloc(stepSize, numSteps)
+	terra(stepSize: double, numSteps: uint, stepSizeAdapt: bool,
+		  targetAcceptRate: double, adaptationRate: double)
+		return HMCKernel.heapAlloc(stepSize, numSteps, stepSizeAdapt,
+								   targetAcceptRate, adaptationRate)
 	end,
-	{stepSize = -1.0, numSteps = 1})
+	{stepSize = -1.0, numSteps = 1, stepSizeAdapt = true,
+	 targetAcceptRate = 0.65, adaptationRate = 0.05})
 
 
 

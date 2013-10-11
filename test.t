@@ -99,12 +99,11 @@ local function adtest(name, computation, trueExpectation)
 end
 
 local function hmctest(name, computation, trueExpectation, numSteps, stepSize)
-	stepSize = stepSize or -1.0
 	numSteps = numSteps or 1
 	return quote
 		var estimates = [Vector(double)].stackAlloc()
 		for run=0,runs do
-			var samps = [mcmc(computation, HMC({stepSize=stepSize, numSteps=numSteps}), {numsamps=numsamps, lag=lag, verbose=false})]
+			var samps = [mcmc(computation, HMC({numSteps=numSteps}), {numsamps=numsamps, lag=lag, verbose=false})]
 			estimates:push([expectation(double)](&samps))
 			m.destruct(samps)
 		end
