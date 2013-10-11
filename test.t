@@ -99,7 +99,7 @@ local function adtest(name, computation, trueExpectation)
 end
 
 local function hmctest(name, computation, trueExpectation, numSteps, stepSize)
-	stepSize = stepSize or 0.75
+	stepSize = stepSize or -1.0
 	numSteps = numSteps or 1
 	return quote
 		var estimates = [Vector(double)].stackAlloc()

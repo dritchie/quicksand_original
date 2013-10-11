@@ -10,6 +10,7 @@ local erp = terralib.require("prob.erph")
 local RandVarAD = erp.RandVar(ad.num)
 local rand = terralib.require("prob.random")
 local Vector = terralib.require("vector")
+local util = terralib.require("util")
 
 local C = terralib.includecstring [[
 #include <stdio.h>
@@ -79,21 +80,18 @@ end
 
 -- TODO: The updates in this function are a good candidate for vectorized multiply/add.
 terra HMCKernel:leapfrog(pos: &Vector(double), grad: &Vector(double))
-	var lp : double
-	for s=0,self.numSteps do
-		-- Momentum update (first half)
-		for i=0,self.momenta.size do
-			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
-		end
-		-- Position update
-		for i=0,pos.size do
-			pos:set(i, pos:get(i) + self.stepSize*self.momenta:get(i))
-		end
-		-- Momentum update (second half)
-		lp = self:logProbAndGrad(pos, grad)
-		for i=0,self.momenta.size do
-			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
-		end
+	-- Momentum update (first half)
+	for i=0,self.momenta.size do
+		self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
+	end
+	-- Position update
+	for i=0,pos.size do
+		pos:set(i, pos:get(i) + self.stepSize*self.momenta:get(i))
+	end
+	-- Momentum update (second half)
+	var lp = self:logProbAndGrad(pos, grad)
+	for i=0,self.momenta.size do
+		self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
 	end
 	return lp
 end
@@ -101,6 +99,53 @@ end
 terra HMCKernel:sampleMomenta()
 	self.momenta:resize(self.positions.size)
 	for i=0,self.momenta.size do self.momenta:set(i, [rand.gaussian_sample(double)](0.0, 1.0)) end
+end
+
+-- Search for a decent step size
+-- (Code adapted from Stan)
+terra HMCKernel:searchForStepSize()
+	self.stepSize = 1.0
+	var pos = m.copy(self.positions)
+	var grad = m.copy(self.gradient)
+	self:sampleMomenta()
+	var lastlp = self.adTrace.logprob:val()
+	var lp = self:leapfrog(&pos, &grad)
+	var H = lp - lastlp
+	var direction = -1
+	if H > ad.math.log(0.5) then direction = 1 end
+	while true do
+		m.destruct(pos)
+		m.destruct(grad)
+		pos = m.copy(self.positions)
+		grad = m.copy(self.gradient)
+		self:sampleMomenta()
+		lp = self:leapfrog(&pos, &grad)
+		H = lp - lastlp
+		-- If our initial step improved the posterior by more than 0.5, then
+		--    keep doubling step size until the initial step improves by as
+		--    close as possible to 0.5
+		-- If our initial step improved the posterior by less than 0.5, then
+		--    keep halving the step size until the initial step improves by
+		--    as close as possible to 0.5
+		if (direction == 1) and not (H > ad.math.log(0.5)) then
+			break
+		elseif (direction == -1) and not (H < ad.math.log(0.5)) then
+			break
+		elseif direction == 1 then
+			self.stepSize = self.stepSize * 2.0
+		else
+			self.stepSize = self.stepSize * 0.5
+		end
+		-- Check for divergence to infinity or collapse to zero.
+		if self.stepSize > 1e300 then
+			util.fatalError("Bad posterior - HMC step size search diverged to infinity.")
+		end
+		if self.stepSize == 0 then
+			util.fatalError("Bad (discontinuous?) posterior - HMC step size search collapsed to zero.")
+		end
+	end
+	m.destruct(pos)
+	m.destruct(grad)
 end
 
 terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
@@ -122,6 +167,11 @@ terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
 	-- Initialize the gradient
 	self:logProbAndGrad(&self.positions, &self.gradient)
 
+	-- If the stepSize wasn't specified, try to find a decent one.
+	if self.stepSize <= 0.0 then
+		self:searchForStepSize()
+	end
+
 	-- Remember that this is the last trace we saw, so we can
 	--    avoid doing all this work if this kernel is repeatedly
 	--    called (and it will be).
@@ -142,10 +192,13 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	for i=0,self.momenta.size do H = H + self.momenta:get(i)*self.momenta:get(i) end
 	H = -0.5*H + currTrace.logprob 
 
-	-- Do an HMC step
+	-- Do leapfrog steps
 	var pos = m.copy(self.positions)
 	var grad = m.copy(self.gradient)
-	var newlp = self:leapfrog(&pos, &grad)
+	var newlp : double
+	for i=0,self.numSteps do
+		newlp = self:leapfrog(&pos, &grad)
+	end
 
 	-- Final Hamiltonian
 	var H_new = 0.0
@@ -194,7 +247,7 @@ local HMC = inf.makeKernelGenerator(
 	terra(stepSize: double, numSteps: uint)
 		return HMCKernel.heapAlloc(stepSize, numSteps)
 	end,
-	{numSteps = 1})
+	{stepSize = -1.0, numSteps = 1})
 
 
 
