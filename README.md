@@ -1,4 +1,4 @@
-probabilistic-terra
+quicksand
 ===================
 
 Turning Terra into a probabilistic programming language
