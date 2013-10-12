@@ -100,8 +100,8 @@ end)
 
 
 -- Trace for the linear interpolation of two programs
--- Only valid for programs with the same set of random variables.
--- This fine, since we only use this for LARJ proposals
+-- This is used in LARJ, where trace1 stores the 'old structure'
+--    and trace2 stores the 'new structure'
 local InterpolationTrace
 InterpolationTrace = templatize(function(ProbType)
 	local BaseTraceT = BaseTrace(ProbType)
@@ -114,7 +114,9 @@ InterpolationTrace = templatize(function(ProbType)
 		trace2: &GlobalTraceT,
 		alpha: double,
 		varlist: Vector(&RandVarT),
-		interpvars: Vector(&InterpolationRandVarT)
+		interpvars: Vector(&InterpolationRandVarT),
+		oldnonstructs: Vector(bool),
+		newnonstructs: Vector(bool),
 	}
 	inheritance.dynamicExtend(BaseTraceT, InterpolationTraceT)
 
@@ -128,6 +130,8 @@ InterpolationTrace = templatize(function(ProbType)
 
 	terra InterpolationTraceT:buildVarList()
 		self.varlist = [Vector(&RandVarT)].stackAlloc()
+		self.oldnonstructs = [Vector(bool)].stackAlloc()
+		self.newnonstructs = [Vector(bool)].stackAlloc()
 		self.interpvars = [Vector(&InterpolationRandVarT)].stackAlloc()
 		var it = self.trace1.vars:iterator()
 		util.foreach(it, [quote
@@ -142,15 +146,27 @@ InterpolationTrace = templatize(function(ProbType)
 			for i=0,minN do
 				var ivar = InterpolationRandVarT.heapAlloc(v1:get(i), v2:get(i))
 				self.varlist:push(ivar)
+				if not ivar.isStructural then
+					self.oldnonstructs:push(false)
+					self.newnonstructs:push(false)
+				end
 				self.interpvars:push(ivar)
 			end
 			-- Variables that only trace1 has
 			for i=minN,n1 do
 				self.varlist:push(v1:get(i))
+				if not v1:get(i).isStructural then
+					self.oldnonstructs:push(true)
+					self.newnonstructs:push(false)
+				end
 			end
 			-- Variables that only trace2 has
 			for i=n1,n2 do
 				self.varlist:push(v2:get(i))
+				if not v2:get(i).isStructural then
+					self.oldnonstructs:push(false)
+					self.newnonstructs:push(true)
+				end
 			end
 		end])
 	end
@@ -189,6 +205,8 @@ InterpolationTrace = templatize(function(ProbType)
 		if self.trace2 ~= nil then m.delete(self.trace2) end
 		m.destruct(self.varlist)
 		m.destruct(self.interpvars)
+		m.destruct(self.oldnonstructs)
+		m.destruct(self.newnonstructs)
 	end
 	inheritance.virtual(InterpolationTraceT, "__destruct")
 
@@ -214,6 +232,13 @@ InterpolationTrace = templatize(function(ProbType)
 	terra InterpolationTraceT:setAlpha(alpha: double)
 		self.alpha = alpha
 		self:updateLPCond()
+	end
+
+	terra InterpolationTraceT:oldNonStructuralVarBits()
+		return &self.oldnonstructs
+	end
+	terra InterpolationTraceT:newNonStructuralVarBits()
+		return &self.newnonstructs
 	end
 
 	-- Generate specialized 'traceUpdate code'
@@ -372,6 +397,7 @@ end
 
 return
 {
+	InterpolationTrace = InterpolationTrace,
 	globals = { LARJ = LARJ }
 }
 

@@ -11,6 +11,7 @@ local RandVarAD = erp.RandVar(ad.num)
 local rand = terralib.require("prob.random")
 local Vector = terralib.require("vector")
 local util = terralib.require("util")
+local larj = terralib.require("prob.larj")
 
 local C = terralib.includecstring [[
 #include <stdio.h>
@@ -86,9 +87,16 @@ local struct HMCKernel
 	positions: Vector(double),
 	gradient: Vector(double),
 	momenta: Vector(double),
+	invMasses: Vector(double),
 	adTrace: &BaseTraceAD,
 	adVars: Vector(&RandVarAD),
-	indepVarNums: Vector(ad.num)
+	indepVarNums: Vector(ad.num),
+
+	-- Stuff specifically for dealing with LARJ annealing
+	doingLARJ: bool,
+	realCompsPerVariable: Vector(int),
+	LARJOldComponents: Vector(int),
+	LARJNewComponents: Vector(int)
 }
 inheritance.dynamicExtend(MCMCKernel, HMCKernel)
 
@@ -106,9 +114,14 @@ terra HMCKernel:__construct(stepSize: double, numSteps: uint, stepSizeAdapt: boo
 	self.positions = [Vector(double)].stackAlloc()
 	self.gradient = [Vector(double)].stackAlloc()
 	self.momenta = [Vector(double)].stackAlloc()
+	self.invMasses = [Vector(double)].stackAlloc()
 	self.adTrace = nil
 	m.init(self.adVars)
 	m.init(self.indepVarNums)
+	self.doingLARJ = false
+	self.realCompsPerVariable = [Vector(int)].stackAlloc()
+	self.LARJOldComponents = [Vector(int)].stackAlloc()
+	self.LARJNewComponents = [Vector(int)].stackAlloc()
 end
 
 terra HMCKernel:__destruct() : {}
@@ -119,6 +132,9 @@ terra HMCKernel:__destruct() : {}
 	m.destruct(self.adVars)
 	m.destruct(self.indepVarNums)
 	if self.adapter ~= nil then m.delete(self.adapter) end
+	m.destruct(self.realCompsPerVariable)
+	m.destruct(self.LARJOldComponents)
+	m.destruct(self.LARJNewComponents)
 end
 inheritance.virtual(HMCKernel, "__destruct")
 
@@ -145,7 +161,7 @@ terra HMCKernel:leapfrog(pos: &Vector(double), grad: &Vector(double))
 	end
 	-- Position update
 	for i=0,pos.size do
-		pos:set(i, pos:get(i) + self.stepSize*self.momenta:get(i))
+		pos:set(i, pos:get(i) + self.stepSize*self.momenta:get(i)*self.invMasses:get(i))
 	end
 	-- Momentum update (second half)
 	var lp = self:logProbAndGrad(pos, grad)
@@ -157,7 +173,19 @@ end
 
 terra HMCKernel:sampleMomenta()
 	self.momenta:resize(self.positions.size)
-	for i=0,self.momenta.size do self.momenta:set(i, [rand.gaussian_sample(double)](0.0, 1.0)) end
+	for i=0,self.momenta.size do
+		var m = [rand.gaussian_sample(double)](0.0, 1.0) * self.invMasses:get(i)
+		self.momenta:set(i, m)
+	end
+end
+
+terra HMCKernel:kineticEnergy()
+	var K = 0.0
+	for i=0,self.momenta.size do
+		var m = self.momenta:get(i)
+		K = K + m*m*self.invMasses:get(i)
+	end
+	return -0.5*K
 end
 
 -- Search for a decent step size
@@ -218,12 +246,76 @@ terra HMCKernel:updateAdaptiveStepSize(dH: double)
 	self.stepSize = self.adapter:update(adaptGrad)
 end
 
+-- Different position variables can have different masses, which
+--    we use during LARJ annealing to make sure that variables being
+--    annealed in/out don't start going all over the place just because
+--    they no longer have any effect on the posterior.
+--    If we don't do this, then we'll end up rejecting almost every
+--    LARJ jump because the reverse log proposal probability will go to
+--    negative infinity.
+terra HMCKernel:updateInverseMasses(currTrace: &BaseTraceD)
+	if self.doingLARJ then
+		var alpha = ([&larj.InterpolationTrace(double)](currTrace)).alpha
+		-- Variables that are annealing in gradually get less mass (m -> 1)
+		-- Variables that are annealing out gradually get more mass (m -> inf)
+		var oldScale = (1.0-alpha)
+		var newScale = alpha
+		for i=0,self.LARJOldComponents.size do
+			var j = self.LARJOldComponents:get(i)
+			self.invMasses:set(j, oldScale)
+		end
+		for i=0,self.LARJNewComponents.size do
+			var j = self.LARJNewComponents:get(i)
+			self.invMasses:set(j, newScale)
+		end
+	end
+end
+terra HMCKernel:initInverseMasses(currTrace: &BaseTraceD)
+	self.invMasses:resize(self.positions.size)
+	for i=0,self.invMasses.size do
+		self.invMasses:set(i, 1.0)
+	end
+	if [inheritance.isInstanceOf(larj.InterpolationTrace(double))](currTrace) then
+		self.doingLARJ = true
+		self.LARJOldComponents:clear()
+		self.LARJNewComponents:clear()
+		-- The trace can tell us which nonstructural variables are old (annealing out)
+		--    or new (annealing in).
+		-- Since each variable can have > 0 real components, we need to do some simple
+		--    conversions to calculate which real components (i.e. which variables in
+		--    the HMC phase space) are old vs. new
+		var itrace = [&larj.InterpolationTrace(double)](currTrace)
+		var oldnonstructs = itrace:oldNonStructuralVarBits()
+		var newnonstructs = itrace:newNonStructuralVarBits()
+		var currindex = 0
+		for i=0,oldnonstructs.size do
+			var numreals = self.realCompsPerVariable:get(i)
+			if oldnonstructs:get(i) then
+				for j=0,numreals do
+					self.LARJOldComponents:push(currindex+j)
+				end
+			elseif newnonstructs:get(i) then
+				for j=0,numreals do
+					self.LARJNewComponents:push(currindex+j)
+				end
+			end
+			currindex = currindex + numreals
+		end
+	else
+		self.doingLARJ = false
+	end
+	self:updateInverseMasses(currTrace)
+end
+
 terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
 	-- Get the real components of currTrace variables
 	self.positions:clear()
+	self.realCompsPerVariable:clear()
 	var currVars = currTrace:freeVars(false, true)
 	for i=0,currVars.size do
+		var prevsize = self.positions.size
 		currVars:get(i):getRealComponents(&self.positions)
+		self.realCompsPerVariable:push(self.positions.size - prevsize)
 	end
 	m.destruct(currVars)
 
@@ -233,6 +325,9 @@ terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
 	self.adTrace = [BaseTraceD.deepcopy(ad.num)](currTrace)
 	m.destruct(self.adVars)
 	self.adVars = self.adTrace:freeVars(false, true)
+
+	-- Initialize the inverse masses for the HMC phase space
+	self:initInverseMasses(currTrace)
 
 	-- Initialize the gradient
 	self:logProbAndGrad(&self.positions, &self.gradient)
@@ -259,13 +354,14 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 		self:initWithNewTrace(currTrace)
 	end
 
+	-- Update inverse masses of position variables, if needed (LARJ)
+	self:updateInverseMasses(currTrace)
+
 	-- Sample momentum variables
 	self:sampleMomenta()
 
 	-- Initial Hamiltonian
-	var H = 0.0
-	for i=0,self.momenta.size do H = H + self.momenta:get(i)*self.momenta:get(i) end
-	H = -0.5*H + currTrace.logprob 
+	var H = self:kineticEnergy() + currTrace.logprob
 
 	-- Do leapfrog steps
 	var pos = m.copy(self.positions)
@@ -276,9 +372,7 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	end
 
 	-- Final Hamiltonian
-	var H_new = 0.0
-	for i=0,self.momenta.size do H_new = H_new + self.momenta:get(i)*self.momenta:get(i) end
-	H_new = -0.5*H_new + newlp
+	var H_new = self:kineticEnergy() + newlp
 
 	var dH = H_new - H
 
