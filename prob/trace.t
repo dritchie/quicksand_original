@@ -388,12 +388,14 @@ RandExecTrace = templatize(function(ProbType, computation)
 
 	local struct Trace
 	{
-		returnValue: CompType.returns[1]
+		returnValue: CompType.returns[1],
+		hasReturnValue: bool
 	}
 	inheritance.dynamicExtend(ParentClass, Trace)
 
 	terra Trace:__construct()
 		ParentClass.__construct(self)
+		self.hasReturnValue = false
 		-- Initialize the trace with rejection sampling
 		while not self.conditionsSatisfied do
 			-- Clear out the existing vars
@@ -411,6 +413,7 @@ RandExecTrace = templatize(function(ProbType, computation)
 	Trace.__templatecopy = templatize(function(P)
 		return terra(self: &Trace, other: &RandExecTrace(P, computation))
 			[ParentClass.__templatecopy(P)](self, other)
+			self.hasReturnValue = false
 		end
 	end)
 
@@ -471,8 +474,9 @@ RandExecTrace = templatize(function(ProbType, computation)
 			quote end]
 
 			-- Run computation
-			m.destruct(self.returnValue)
+			if self.hasReturnValue then m.destruct(self.returnValue) end
 			self.returnValue = speccomp()
+			self.hasReturnValue = true
 
 			-- Clean up
 			self.loopcounters:clear()
