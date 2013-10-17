@@ -400,7 +400,7 @@ local function rejectionSample(computation)
 	computation = spec.probcomp(computation)
 	return quote
 		var tr = [trace.newTrace(computation)]
-		var retval = tr.returnValue
+		var retval = m.copy(tr.returnValue)
 		m.delete(tr)
 	in
 		retval
