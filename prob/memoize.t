@@ -152,11 +152,20 @@ local function mem(fn)
 	return `MemFnType.stackAlloc()
 end
 
+-- Version of mem that can be called from Lua (to set up 'global' memoized functions)
+local function memglobal(fn)
+	local terra memwrapper()
+		return [mem(fn)]
+	end
+	local mfn = memwrapper()
+	m.gc(mfn)
+	return mfn
+end
 
 
 return
 {
-	globals = { mem = mem }
+	globals = { mem = mem, memglobal = memglobal }
 }
 
 
