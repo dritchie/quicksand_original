@@ -603,7 +603,6 @@ local factor = spec.specializable(function(...)
 	local factorEval = spec.paramFromList("factorEval", ...)
 	local doingInference = spec.paramFromList("doingInference", ...)
 	local globTrace = globalTrace(spec.paramFromList("scalarType", ...))
-	-- TODO: Also check "are we in inference?"
 	return macro(function(num)
 		-- Do not generate any code if we're compiling a specialization
 		--    without factor evaluation, or if we're running the code outside of
