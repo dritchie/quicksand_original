@@ -198,9 +198,6 @@ end)
 
 
 
-local traceUpdateImpl = templatize(function(ProbType)
-	return virtualTemplate(BaseTrace(ProbType), "traceUpdate", function(...) return {}->{} end)
-end)
 local function traceUpdate(paramTable)
 	paramTable = paramTable or {}
 	paramTable.doingInference = true
@@ -209,7 +206,8 @@ local function traceUpdate(paramTable)
 		-- ProbType is the first template parameter
 		local ProbType = TraceType.__templateParams[1]
 		paramTable.scalarType = ProbType
-		return `[traceUpdateImpl(ProbType)(unpack(spec.paramTableToList(paramTable)))](inst)
+		-- return `[traceUpdateImpl(ProbType)(unpack(spec.paramTableToList(paramTable)))](inst)
+		return `[BaseTrace(ProbType).traceUpdate(unpack(spec.paramTableToList(paramTable)))](inst)
 	end)
 end
 
