@@ -17,8 +17,6 @@ double currentTimeInSeconds() {
 }
 ]]
 
-initrand()
-
 local numsamps = 150
 local lag = 20
 local larjAnnealSteps = 10

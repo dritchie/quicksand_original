@@ -12,10 +12,6 @@ local C = terralib.includecstring([[
 	double random_() { return rand() / (RAND_MAX+1.0); }
 	void initrand_() { srand(time(NULL)); }
 ]])
--- local random = terralib.includecstring([[
--- 	#include <stdlib.h>
--- 	double random_() { return rand() / (RAND_MAX+1.0); }
--- ]]).random_
 local random = C.random_
 
 
@@ -34,6 +30,7 @@ end)
 
 
 fns.random = random
+fns.initrand = C.initrand_
 
 
 -- Samplers/scorers
@@ -335,7 +332,6 @@ end)
 
 
 -- Module exports
-fns.globals = {initrand = C.initrand_}
 return fns
 
 

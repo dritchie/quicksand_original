@@ -1,4 +1,5 @@
 local spec = terralib.require("prob.specialize")
+local rand = terralib.require("prob.random")
 
 ----------------------------------
 -- Specialization parameters and their defaults
@@ -30,11 +31,13 @@ local function processModules(...)
 	for i=1,select("#",...) do processModule((select(i,...))) end
 end
 
-processModules("random",
-			   "erph",
+processModules("erph",
 			   "erp",
 			   "trace",
 			   "inference",
 			   "memoize",
 			   "larj",
 			   "hmc")
+
+-- Seed the random sampler
+rand.initrand()
