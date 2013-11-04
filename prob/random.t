@@ -6,10 +6,17 @@ local ad = terralib.require("ad")
 local erph = terralib.require("prob.erph")
 
 -- Base RNG
-local random = terralib.includecstring([[
+local C = terralib.includecstring([[
 	#include <stdlib.h>
+	#include <sys/time.h>
 	double random_() { return rand() / (RAND_MAX+1.0); }
-]]).random_
+	void initrand_() { srand(time(NULL)); }
+]])
+-- local random = terralib.includecstring([[
+-- 	#include <stdlib.h>
+-- 	double random_() { return rand() / (RAND_MAX+1.0); }
+-- ]]).random_
+local random = C.random_
 
 
 -- Turning templated functions into overloaded ones
@@ -328,6 +335,7 @@ end)
 
 
 -- Module exports
+fns.globals = {initrand = C.initrand_}
 return fns
 
 

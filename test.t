@@ -15,10 +15,9 @@ double currentTimeInSeconds() {
     gettimeofday(&tv, NULL);
     return tv.tv_sec + tv.tv_usec / 1000000.0;
 }
-void initrand() { srand(time(NULL)); }
 ]]
 
-C.initrand()
+initrand()
 
 local numsamps = 150
 local lag = 20
