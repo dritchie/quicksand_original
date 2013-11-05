@@ -476,7 +476,7 @@ end
 
 -- Define some commonly-used ERPs
 
-local erp = {makeERP = makeERP}
+local erp = {}
 
 erp.flip =
 makeERP(random.flip_sample,
@@ -494,6 +494,17 @@ makeERP(random.flip_sample,
 erp.uniform =
 makeERP(random.uniform_sample,
 		random.uniform_logprob)
+
+erp.uniformWithFalloff = 
+makeERP(random.uniform_sample,
+		erph.overloadOnParams(2, function(V, P1, P2)
+			return terra(val: V, lo: P1, hi: P2)
+				var lp = -ad.math.log(hi - lo)
+				if val > hi then lp = lp - (val-lo)/(hi-lo) end
+				if val < lo then lp = lp - (hi-val)/(hi-lo) end
+				return lp
+			end
+		end))
 
 erp.multinomial =
 makeERP(random.multinomial_sample,
@@ -568,6 +579,13 @@ makeERP(random.dirichlet_sample,
 		random.dirichlet_logprob)
 
 
+
+-- Public interface to create new ERPs
+erp.newERP = function(name, sample, logprobfn, propose)
+	local newerp = makeERP(sample, logprobfn, propose)
+	spec.registerGlobalSpecializable(name, newerp)
+	rawset(_G, name, newerp())
+end
 
 
 return
