@@ -334,7 +334,7 @@ GlobalTrace = templatize(function(ProbType)
 	end
 	inheritance.virtual(GlobalTraceT, "varListPointer")
 
-	terra GlobalTraceT:factor(num: double)
+	terra GlobalTraceT:factor(num: ProbType)
 		self.logprob = self.logprob + num
 	end
 	util.inline(GlobalTraceT.methods.factor)
@@ -600,7 +600,8 @@ end
 local factor = spec.specializable(function(...)
 	local factorEval = spec.paramFromList("factorEval", ...)
 	local doingInference = spec.paramFromList("doingInference", ...)
-	local globTrace = globalTrace(spec.paramFromList("scalarType", ...))
+	local scalarType = spec.paramFromList("scalarType", ...)
+	local globTrace = globalTrace(scalarType)
 	return macro(function(num)
 		-- Do not generate any code if we're compiling a specialization
 		--    without factor evaluation, or if we're running the code outside of

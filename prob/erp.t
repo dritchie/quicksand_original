@@ -499,7 +499,7 @@ erp.uniformWithFalloff =
 makeERP(random.uniform_sample,
 		erph.overloadOnParams(2, function(V, P1, P2)
 			return terra(val: V, lo: P1, hi: P2)
-				var lp = -ad.math.log(hi - lo)
+				var lp = V(-ad.math.log(hi - lo))
 				if val > hi then lp = lp - (val-lo)/(hi-lo) end
 				if val < lo then lp = lp - (hi-val)/(hi-lo) end
 				return lp
