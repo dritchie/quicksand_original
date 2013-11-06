@@ -69,8 +69,6 @@ m.addConstructors(DualAverage)
 
 -- Kernel for doing Hamiltonian Monte Carlo proposals
 -- Only makes proposals to non-structural variables
--- TODO: automatically adapt step size? (dual averaging scheme from Stan)
--- TODO: variable mass adjustment based on LARJ annealing schedule
 local struct HMCKernel
 {
 	stepSize: double,
@@ -183,7 +181,8 @@ terra HMCKernel:kineticEnergy()
 	var K = 0.0
 	for i=0,self.momenta.size do
 		var m = self.momenta:get(i)
-		K = K + m*m*self.invMasses:get(i)
+		var invmass = self.invMasses:get(i)
+		K = K + m*m*invmass
 	end
 	return -0.5*K
 end
@@ -214,9 +213,9 @@ terra HMCKernel:searchForStepSize()
 		-- If our initial step improved the posterior by less than 0.5, then
 		--    keep halving the step size until the initial step improves by
 		--    as close as possible to 0.5
-		if (direction == 1) and not (H > ad.math.log(0.5)) then
+		if (direction == 1) and (H <= ad.math.log(0.5)) then
 			break
-		elseif (direction == -1) and not (H < ad.math.log(0.5)) then
+		elseif (direction == -1) and (H >= ad.math.log(0.5)) then
 			break
 		elseif direction == 1 then
 			self.stepSize = self.stepSize * 2.0
