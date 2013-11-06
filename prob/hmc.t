@@ -239,10 +239,10 @@ terra HMCKernel:updateAdaptiveStepSize(dH: double)
 	var EdH = ad.math.exp(dH)
 	if EdH > 1.0 then EdH = 1.0 end
 	-- Supress NaNs
-	if EdH ~= EdH then EdH = 0.0 end
+	if not (EdH == EdH) then EdH = 0.0 end
 	var adaptGrad = self.targetAcceptRate - EdH
 	-- Dual averaging
-	self.stepSize = self.adapter:update(adaptGrad)
+	self.stepSize = ad.math.exp(self.adapter:update(adaptGrad))
 end
 
 -- Different position variables can have different masses, which
