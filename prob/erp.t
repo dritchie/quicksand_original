@@ -339,11 +339,6 @@ end
 local function createRandVarFromCallsite(scalarType, sample, logprobfn, propose, computation, ...)
 	local id = erph.getCurrentERPID()
 
-	-- Check if we've already built this specialization
-	local class = getRandVarFromCallsite(scalarType, computation, id)
-	if class then return class end
-
-	-- Otherwise, we need to build the class
 	local struct RandVarFromCallsiteT {}
 	RandVarFromCallsiteT.paramTypes = {...}
 	local ParentClass = RandVarFromFunctions(scalarType, sample, logprobfn, propose, ...)
@@ -405,27 +400,41 @@ local function makeERP(sample, logprobfn, propose)
 		local specParams = spec.paramListToTable(...)
 		local V = spec.paramFromTable("scalarType", specParams)
 		local computation = spec.paramFromTable("computation", specParams)
-		local erpfn = nil
-		for _,d in ipairs(sample(V):getdefinitions()) do
-			local paramtypes = d:gettype().parameters
-			local rettype = d:gettype().returns[1]
+
+		return macro(function(...)
+			local args = {...}
+			local specSample = sample(V)
+			local numParams = #specSample:gettype().parameters
+			-- Check whether this is a conditioned or unconditioned ERP
+			local paramtypes = {}
+			local isCond = false
+			if #args == numParams + 2 then
+				isCond = true
+				for i=3,#args do table.insert(paramtypes, args[i]:gettype()) end
+			elseif #args == numParams + 1 then
+				for i=2,#args do table.insert(paramtypes, args[i]:gettype()) end
+			else
+				error("Unexpected number of arguments to ERP function call.")
+			end
+			local rettype = specSample:gettype().returns[1]	-- All overloads must have same return type, so this is fine.
 			local RandVarType = createRandVarFromCallsite(V, sample, logprobfn, propose, computation, unpack(paramtypes))
 			local params = {}
 			for _,t in ipairs(paramtypes) do table.insert(params, symbol(t)) end
-			-- First the conditioned version
-			local def = terra(isstruct: bool, condVal: rettype, [params])
-				return [trace.lookupVariableValue(RandVarType, isstruct, true, condVal, params, specParams)]
+			local erpfn = nil
+			if isCond then
+				erpfn = terra(isstruct: bool, condVal: rettype, [params])
+					return [trace.lookupVariableValue(RandVarType, isstruct, true, condVal, params, specParams)]
+				end
+			else
+				erpfn = terra(isstruct: bool, [params])
+					return [trace.lookupVariableValue(RandVarType, isstruct, false, nil, params, specParams)]
+				end
 			end
-			if not erpfn then erpfn = def else erpfn:adddefinition(def:getdefinitions()[1]) end
-			-- Then the unconditioned version
-			def = terra(isstruct: bool, [params])
-				return [trace.lookupVariableValue(RandVarType, isstruct, false, nil, params, specParams)]
-			end
-			erpfn:adddefinition(def:getdefinitions()[1])
-		end
-		-- The ERP must push an ID to the callsite stack.
-		erpfn = trace.pfn(specParams)(erpfn)
-		return erpfn
+			-- The ERP must push an ID to the callsite stack.
+			erpfn = trace.pfn(specParams)(erpfn)
+			-- Generate call to function
+			return `erpfn([args])
+		end)
 	end)
 
 	local function getisstruct(opstruct)
