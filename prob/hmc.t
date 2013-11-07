@@ -224,10 +224,10 @@ terra HMCKernel:searchForStepSize()
 		end
 		-- Check for divergence to infinity or collapse to zero.
 		if self.stepSize > 1e300 then
-			util.fatalError("Bad posterior - HMC step size search diverged to infinity.")
+			util.fatalError("Bad posterior - HMC step size search diverged to infinity.\n")
 		end
 		if self.stepSize == 0 then
-			util.fatalError("Bad (discontinuous?) posterior - HMC step size search collapsed to zero.")
+			util.fatalError("Bad (discontinuous?) posterior - HMC step size search collapsed to zero.\n")
 		end
 	end
 	m.destruct(pos)
