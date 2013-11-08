@@ -16,6 +16,12 @@ local C = terralib.includecstring [[
 #include <stdio.h>
 #include <math.h>
 inline void flush() { fflush(stdout); }
+#include <sys/time.h>
+double currentTimeInSeconds() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec + tv.tv_usec / 1000000.0;
+}
 ]]
 
 
@@ -366,10 +372,12 @@ local function mcmc(computation, kernelgen, params)
 		var kernel = [kernelgen()]
 		var samps = [Vector(Sample(RetValType))].stackAlloc()
 		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
+		var t0 = 0.0
 		for i=0,iters do
 			if verbose then
 				C.printf(" iteration: %d\r", i+1)
 				C.flush()
+				if i == 1 then t0 = C.currentTimeInSeconds() end
 			end
 			currTrace = kernel:next(currTrace)
 			if i % lag == 0 and i > burnin then
@@ -380,6 +388,8 @@ local function mcmc(computation, kernelgen, params)
 		if verbose then
 			C.printf("\n")
 			kernel:stats()
+			var t1 = C.currentTimeInSeconds()
+			C.printf("Time: %g\n", t1 - t0)
 		end
 		m.delete(kernel)
 		return samps
