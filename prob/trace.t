@@ -431,7 +431,7 @@ RandExecTrace = templatize(function(ProbType, computation)
 
 	terra Trace:__destruct() : {}
 		ParentClass.__rawdestruct(self)
-		m.destruct(self.returnValue)
+		if self.hasReturnValue then m.destruct(self.returnValue) end
 	end
 	inheritance.virtual(Trace, "__destruct")
 

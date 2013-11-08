@@ -111,19 +111,10 @@ terra RandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 			rvsPropLP = rvsPropLP + nextTrace.oldlogprob - C.log([double](newNumVars))
 		end
 		var acceptThresh = nextTrace.logprob - currTrace.logprob + rvsPropLP - fwdPropLP
-		-- C.printf("--------------------------\n")
-		-- C.printf("currTrace.logprob:    %g\n", currTrace.logprob)
-		-- C.printf("nextTrace.logprob:    %g\n", nextTrace.logprob)
-		-- C.printf("nextTrace.newlogprob:    %g\n", nextTrace.newlogprob)
-		-- C.printf("nextTrace.oldlogprob:    %g\n", nextTrace.oldlogprob)
-		-- C.printf("fwdPropLP:    %g\n", fwdPropLP)
-		-- C.printf("rvsPropLP:    %g\n", rvsPropLP)
 		if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
-			-- C.printf("ACCEPTED\n")
 			self.proposalsAccepted = self.proposalsAccepted + 1
 			m.delete(currTrace)
 		else
-			-- C.printf("REJECTED\n")
 			m.delete(nextTrace)
 			nextTrace = currTrace
 		end
@@ -163,50 +154,92 @@ local RandomWalk = makeKernelGenerator(
 -- Random walk kernel that runs an automatically differentiated version
 --    of the program.
 -- Only works on fixed-structure programs whose ERPs all have type double
--- This is not useful in practice (note that it's not exported as one of
---     the module's globals), but it's useful for testing that AD dual
+-- This is not useful in practice, but it's useful for testing that AD dual
 --     nums are working properly.
+local RandVarAD = erp.RandVar(ad.num)
 local BaseTraceAD = BaseTrace(ad.num)
 local struct ADRandomWalkKernel
 {
 	proposalsMade: uint,
-	proposalsAccepted: uint
+	proposalsAccepted: uint,
+	adTrace: &BaseTraceAD,
+	lastTrace: &BaseTraceD,
+	adVars: Vector(&RandVarAD),
+	values: Vector(double)
 }
 inheritance.dynamicExtend(MCMCKernel, ADRandomWalkKernel)
 
 terra ADRandomWalkKernel:__construct()
 	self.proposalsMade = 0
 	self.proposalsAccepted = 0
+	self.adTrace = nil
+	self.lastTrace = nil
+	m.init(self.adVars)
+	m.init(self.values)
 end
 
-terra ADRandomWalkKernel:__destruct() : {} end
+terra ADRandomWalkKernel:__destruct() : {}
+	m.destruct(self.adVars)
+	m.destruct(self.values)
+	if self.adTrace ~= nil then
+		m.delete(self.adTrace)
+	end
+end
 inheritance.virtual(ADRandomWalkKernel, "__destruct")
+
+terra ADRandomWalkKernel:initWithNewTrace(currTrace: &BaseTraceD)
+	self.lastTrace = currTrace
+	if self.adTrace ~= nil then m.delete(self.adTrace) end
+	self.adTrace = [BaseTraceD.deepcopy(ad.num)](currTrace)
+	m.destruct(self.adVars)
+	self.adVars = self.adTrace:freeVars(false, true)
+	self.values:resize(self.adVars.size)
+	for i=0,self.values.size do
+		var val = [erp.valueAs(ad.num)](self.adVars:get(i))
+		self.values:set(i, val:val())
+	end
+end
 
 terra ADRandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	self.proposalsMade = self.proposalsMade + 1
-	var nextTrace = [BaseTraceD.deepcopy(ad.num)](currTrace)
-	var freevars = nextTrace:freeVars(false, true)
-	var v = freevars:get(rand.uniformRandomInt(0, freevars.size))
+	if self.lastTrace ~= currTrace then
+		self:initWithNewTrace(currTrace)
+	end
+	var nextTrace = self.adTrace
+	var freevars = &self.adVars
+	-- Set the variable values for our working AD trace
+	for i=0,self.values.size do
+		var adv = self.adVars:get(i)
+		@[&ad.num](adv:pointerToValue()) = self.values:get(i)
+	end
+	-- Have to traceUpdate once to flush any changes to parameters before
+	--    we can safely call proposeNewValue()
+	[trace.traceUpdate({structureChange=false, factorEval=false})](nextTrace)
+	-- Propose change to randomly-selected variable
+	var whichVar = rand.uniformRandomInt(0, freevars.size)
+	var v = freevars:get(whichVar)
 	var fwdPropLP, rvsPropLP = v:proposeNewValue()
+	-- Update trace
 	[trace.traceUpdate({structureChange=false})](nextTrace)
 	var acceptThresh = nextTrace.logprob - currTrace.logprob + rvsPropLP - fwdPropLP
 	if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
 		self.proposalsAccepted = self.proposalsAccepted + 1
-		-- Copy values back into currTrace
+		-- Copy values back into currTrace, and into self.values
 		var oldfreevars = currTrace:freeVars(false, true)
 		for i=0,oldfreevars.size do
-			var newval = [erp.valueAs(ad.num)](freevars:get(i))
-			var newval_val = newval:val()
-			oldfreevars:get(i):setValue(&newval_val)
+			var newval = [erp.valueAs(ad.num)](freevars:get(i)):val()
+			oldfreevars:get(i):setValue(&newval)
+			self.values:set(i, newval)
 		end
+		m.destruct(oldfreevars)
 		-- Reconstruct return value by running a traceUpdate
 		-- (No need to evaluate any factors)
 		[trace.traceUpdate({structureChange=false, factorEval=false})](currTrace)
 		-- Set the final logprob (since we didn't evaluate factors)
 		[BaseTraceD.setLogprobFrom(ad.num)](currTrace, nextTrace)
 	end
-	m.delete(nextTrace)
-	m.destruct(freevars)
+	-- Recover tape memory so we don't run out
+	ad.recoverMemory()
 	return currTrace
 end
 inheritance.virtual(ADRandomWalkKernel, "next")
@@ -413,9 +446,9 @@ return
 	MCMCKernel = MCMCKernel,
 	makeKernelGenerator = makeKernelGenerator,
 	MultiKernel = MultiKernel,
-	ADRandomWalk = ADRandomWalk,   -- Not exported as a global; only for debugging
 	globals = {
 		RandomWalk = RandomWalk,
+		ADRandomWalk = ADRandomWalk,
 		mcmc = mcmc,
 		rejectionSample = rejectionSample,
 		mean = mean,
