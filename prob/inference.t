@@ -320,6 +320,57 @@ m.addConstructors(MultiKernel)
 
 
 
+-- MCMC Kernel that does some computation based on how long
+--    inference has been running.
+local SchedulingKernel = templatize(function(innerKernelGen, schedule)
+	
+	local struct SchedulingKernelT
+	{
+		innerKernel: &MCMCKernel,
+		currIter: uint
+	}
+	inheritance.dynamicExtend(MCMCKernel, SchedulingKernelT)
+
+	-- Assumes ownership of innerKernel
+	terra SchedulingKernelT:__construct()
+		self.innerKernel = [innerKernelGen()]
+		self.currIter = 0
+	end
+
+	terra SchedulingKernelT:__destruct() : {}
+		m.delete(self.innerKernel)
+	end
+	inheritance.virtual(SchedulingKernelT, "__destruct")
+
+	terra SchedulingKernelT:next(currTrace: &BaseTraceD) : &BaseTraceD
+		schedule(self.currIter)
+		var nextTrace = self.innerKernel:next(currTrace) 
+		self.currIter = self.currIter + 1
+		return nextTrace
+	end
+	inheritance.virtual(SchedulingKernelT, "next")
+
+	terra SchedulingKernelT:name() : rawstring return [SchedulingKernelT.name] end
+	inheritance.virtual(SchedulingKernelT, "name")
+
+	terra SchedulingKernelT:stats() : {}
+		self.innerKernel:stats()
+	end
+	inheritance.virtual(SchedulingKernelT, "stats")
+
+	m.addConstructors(SchedulingKernelT)
+	return SchedulingKernelT
+
+end)
+
+local function Schedule(innerKernelGen, schedule)
+	return macro(function()
+		return `[SchedulingKernel(innerKernelGen, schedule)].heapAlloc()
+	end)
+end
+
+
+
 
 ---- Methods for actually doing some kind of inference:
 
@@ -459,6 +510,7 @@ return
 	globals = {
 		RandomWalk = RandomWalk,
 		ADRandomWalk = ADRandomWalk,
+		Schedule = Schedule,
 		mcmc = mcmc,
 		rejectionSample = rejectionSample,
 		mean = mean,
