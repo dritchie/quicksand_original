@@ -116,7 +116,7 @@ terra RandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 			fwdPropLP = fwdPropLP + nextTrace.newlogprob - C.log([double](oldNumVars))
 			rvsPropLP = rvsPropLP + nextTrace.oldlogprob - C.log([double](newNumVars))
 		end
-		var acceptThresh = nextTrace.logprob - currTrace.logprob + rvsPropLP - fwdPropLP
+		var acceptThresh = (nextTrace.logprob - currTrace.logprob)/currTrace.temperature + rvsPropLP - fwdPropLP
 		if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
 			self.proposalsAccepted = self.proposalsAccepted + 1
 			m.delete(currTrace)
@@ -227,7 +227,7 @@ terra ADRandomWalkKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	var fwdPropLP, rvsPropLP = v:proposeNewValue()
 	-- Update trace
 	[trace.traceUpdate({structureChange=false})](nextTrace)
-	var acceptThresh = nextTrace.logprob - currTrace.logprob + rvsPropLP - fwdPropLP
+	var acceptThresh = (nextTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP
 	if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
 		self.proposalsAccepted = self.proposalsAccepted + 1
 		-- Copy values back into currTrace, and into self.values
@@ -343,7 +343,7 @@ local SchedulingKernel = templatize(function(innerKernelGen, schedule)
 	inheritance.virtual(SchedulingKernelT, "__destruct")
 
 	terra SchedulingKernelT:next(currTrace: &BaseTraceD) : &BaseTraceD
-		schedule(self.currIter)
+		schedule(self.currIter, currTrace)
 		var nextTrace = self.innerKernel:next(currTrace) 
 		self.currIter = self.currIter + 1
 		return nextTrace

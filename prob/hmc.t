@@ -360,7 +360,7 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	self:sampleMomenta()
 
 	-- Initial Hamiltonian
-	var H = self:kineticEnergy() + currTrace.logprob
+	var H = self:kineticEnergy() + currTrace.logprob/currTrace.temperature 
 
 	-- Do leapfrog steps
 	var pos = m.copy(self.positions)
@@ -371,7 +371,7 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	end
 
 	-- Final Hamiltonian
-	var H_new = self:kineticEnergy() + newlp
+	var H_new = self:kineticEnergy() + newlp/currTrace.temperature 
 
 	var dH = H_new - H
 

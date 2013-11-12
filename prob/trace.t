@@ -132,6 +132,7 @@ BaseTrace = templatize(function(ProbType)
 		newlogprob: ProbType,
 		oldlogprob: ProbType,
 		conditionsSatisfied: bool,
+		temperature: double
 	}
 
 	terra BaseTraceT:__construct()
@@ -139,6 +140,7 @@ BaseTrace = templatize(function(ProbType)
 		self.newlogprob = 0.0
 		self.oldlogprob = 0.0
 		self.conditionsSatisfied = false
+		self.temperature = 1.0
 	end
 
 	BaseTraceT.__templatecopy = templatize(function(P)
@@ -147,6 +149,7 @@ BaseTrace = templatize(function(ProbType)
 			self.newlogprob = other.newlogprob
 			self.oldlogprob = other.oldlogprob
 			self.conditionsSatisfied = other.conditionsSatisfied
+			self.temperature = other.temperature
 		end
 	end)
 

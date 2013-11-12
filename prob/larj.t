@@ -345,7 +345,7 @@ terra LARJKernel:next(currTrace: &BaseTraceD)  : &BaseTraceD
 
 	-- Finalize accept/reject decision
 	rvsPropLP = oldStructTrace:lpDiff(newStructTrace) - C.log(newNumStructVars)
-	var acceptanceProb = newStructTrace.logprob - currTrace.logprob + rvsPropLP - fwdPropLP + annealingLpRatio
+	var acceptanceProb = (newStructTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP + annealingLpRatio
 	var accepted = newStructTrace.conditionsSatisfied and C.log(rand.random()) < acceptanceProb
 	m.delete(oldStructTrace)
 	if accepted then
