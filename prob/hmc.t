@@ -55,13 +55,14 @@ terra DualAverage:update(g: double)
 		var muk = 0.5 * ad.math.sqrt(self.k) / self.gamma
 		self.gbar = avgeta*g + (1-avgeta)*self.gbar
 		self.lastx = self.x0 - muk*self.gbar
-		var oldxbar = self.xbar
-		self.xbar = xbar_avgeta*self.lastx + (1-xbar_avgeta)*self.xbar
-		if ad.math.fabs(oldxbar - self.xbar) < self.minChange then
-			self.adapting = false
-		end
+		-- var oldxbar = self.xbar
+		-- self.xbar = xbar_avgeta*self.lastx + (1-xbar_avgeta)*self.xbar
+		-- if ad.math.fabs(oldxbar - self.xbar) < self.minChange then
+		-- 	self.adapting = false
+		-- end
 	end
-	return self.xbar
+	-- return self.xbar
+	return self.lastx
 end
 
 m.addConstructors(DualAverage)
