@@ -360,6 +360,11 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 	-- Sample momentum variables
 	self:sampleMomenta()
 
+	-- -- NEW VERSION OF TEMPERING: Momentum scaling
+	-- for i=0,self.momenta.size do
+	-- 	self.momenta(i) = currTrace.temperature*self.momenta(i)
+	-- end
+
 	-- Initial Hamiltonian
 	var H = (self:kineticEnergy() + currTrace.logprob)/currTrace.temperature 
 
