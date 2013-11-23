@@ -318,6 +318,10 @@ terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
 		self.realCompsPerVariable:push(self.positions.size - prevsize)
 	end
 	m.destruct(currVars)
+	-- We must have some real-valued, non-structural variables
+	if self.positions.size == 0 then
+		util.fatalError("Cannot use HMC on a program with zero real-valued nonstructurals\n")
+	end
 
 	-- Create an AD trace that we can use for calculations
 	-- Also remember the nonstructural variables
