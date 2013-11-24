@@ -24,14 +24,16 @@ RandVar = templatize(function(ProbType)
 		logprob: ProbType,
 		isStructural: bool,
 		isDirectlyConditioned: bool,
-		isActive: bool
+		isActive: bool,
+		traceDepth: uint
 	}
 
-	terra RandVarT:__construct(isstruct: bool, iscond: bool)
+	terra RandVarT:__construct(isstruct: bool, iscond: bool, depth: uint)
 		self.isStructural = isstruct
 		self.isDirectlyConditioned = iscond
 		self.isActive = true
 		self.logprob = ProbType(0.0)
+		self.traceDepth = depth
 	end
 
 	RandVarT.__templatecopy = templatize(function(P)
@@ -40,6 +42,7 @@ RandVar = templatize(function(ProbType)
 			self.isDirectlyConditioned = other.isDirectlyConditioned
 			self.isActive = other.isActive
 			self.logprob = other.logprob	-- a cast had better exist
+			self.traceDepth = other.traceDepth
 		end
 	end)
 

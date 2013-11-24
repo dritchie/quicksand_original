@@ -36,7 +36,7 @@ local InterpolationRandVar = templatize(function(ProbType)
 	inheritance.dynamicExtend(RVar, InterpolationRandVarT)
 
 	terra InterpolationRandVarT:__construct(rv1: &RVar, rv2: &RVar)
-		RVar.__construct(self, rv1.isStructural, rv2.isDirectlyConditioned)
+		RVar.__construct(self, rv1.isStructural, rv1.isDirectlyConditioned, rv1.traceDepth)
 		self.logprob = rv1.logprob
 		self.rv1 = rv1
 		self.rv2 = rv2

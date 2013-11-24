@@ -25,8 +25,8 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 	local RVar = RandVar(ProbType)
 	inheritance.dynamicExtend(RVar, RandVarWithValT)
 
-	terra RandVarWithValT:__construct(val: ValType, isstruct: bool, iscond: bool)
-		RVar.__construct(self, isstruct, iscond)
+	terra RandVarWithValT:__construct(val: ValType, isstruct: bool, iscond: bool, depth: uint)
+		RVar.__construct(self, isstruct, iscond, depth)
 		self.value = m.copy(val)
 	end
 
@@ -187,17 +187,17 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	-- Ctor 1: Take in a value argument 
 	local paramsyms = {}
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-	terra RandVarFromFunctionsT:__construct(val: ValType, isstruct: bool, iscond: bool, [paramsyms])
-		ParentClass.__construct(self, val, isstruct, iscond)
+	terra RandVarFromFunctionsT:__construct(val: ValType, isstruct: bool, iscond: bool, depth: uint, [paramsyms])
+		ParentClass.__construct(self, val, isstruct, iscond, depth)
 		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]
 		self:updateLogprob()
 	end
 	-- Ctor 2: No value argument, sample one instead
 	paramsyms = {}
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-	terra RandVarFromFunctionsT:__construct(isstruct: bool, iscond: bool, [paramsyms])
+	terra RandVarFromFunctionsT:__construct(isstruct: bool, iscond: bool, depth: uint, [paramsyms])
 		var val = sample([paramsyms])
-		ParentClass.__construct(self, val, isstruct, iscond)
+		ParentClass.__construct(self, val, isstruct, iscond, depth)
 		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]
 		self:updateLogprob()
 	end

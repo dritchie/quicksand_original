@@ -551,9 +551,10 @@ local function lookupVariableValueStructural(RandVarType, isstruct, iscond, cond
 			-- Check for changes that necessitate a logprob update
 			[iscond and (`rv:checkForUpdates(condVal, [params])) or (`rv:checkForUpdates([params]))]
 		else
+			var depth = callsiteStack.size
 			-- Make new variable, add to master list of vars, add to newlogprob
-			rv = [iscond and (`RandVarType.heapAlloc(condVal, isstruct, iscond, [params])) or
-							 (`RandVarType.heapAlloc(isstruct, iscond, [params]))]
+			rv = [iscond and (`RandVarType.heapAlloc(condVal, isstruct, iscond, depth, [params])) or
+							 (`RandVarType.heapAlloc(isstruct, iscond, depth, [params]))]
 			globTrace.newlogprob = globTrace.newlogprob + rv.logprob
 			globTrace.lastVarList:push(rv)
 		end
