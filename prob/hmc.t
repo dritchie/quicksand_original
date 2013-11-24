@@ -88,7 +88,8 @@ local struct HMCKernel
 	momenta: Vector(double),
 	invMasses: Vector(double),
 	adTrace: &BaseTraceAD,
-	adVars: Vector(&RandVarAD),
+	adNonstructuralVars: Vector(&RandVarAD),
+	adStructuralVars: Vector(&RandVarAD),
 	indepVarNums: Vector(ad.num),
 
 	-- Stuff specifically for dealing with LARJ annealing
@@ -115,7 +116,8 @@ terra HMCKernel:__construct(stepSize: double, numSteps: uint, stepSizeAdapt: boo
 	self.momenta = [Vector(double)].stackAlloc()
 	self.invMasses = [Vector(double)].stackAlloc()
 	self.adTrace = nil
-	m.init(self.adVars)
+	m.init(self.adNonstructuralVars)
+	m.init(self.adStructuralVars)
 	m.init(self.indepVarNums)
 	self.doingLARJ = false
 	self.realCompsPerVariable = [Vector(int)].stackAlloc()
@@ -128,7 +130,8 @@ terra HMCKernel:__destruct() : {}
 	m.destruct(self.momenta)
 	m.destruct(self.gradient)
 	if self.adTrace ~= nil then m.delete(self.adTrace) end
-	m.destruct(self.adVars)
+	m.destruct(self.adNonstructuralVars)
+	m.destruct(self.adStructuralVars)
 	m.destruct(self.indepVarNums)
 	if self.adapter ~= nil then m.delete(self.adapter) end
 	m.destruct(self.realCompsPerVariable)
@@ -143,8 +146,14 @@ terra HMCKernel:logProbAndGrad(pos: &Vector(double), grad: &Vector(double))
 		self.indepVarNums:set(i, ad.num(pos:get(i)))
 	end
 	var index = 0U
-	for i=0,self.adVars.size do
-		self.adVars:get(i):setRealComponents(&self.indepVarNums, &index)
+	for i=0,self.adNonstructuralVars.size do
+		self.adNonstructuralVars:get(i):setRealComponents(&self.indepVarNums, &index)
+	end
+	-- Also need to force logprob updates for all the structural vars, since their
+	--    logprob values will be invalidated be previous calls to grad()
+	for i=0,self.adStructuralVars.size do
+		var sv = self.adStructuralVars(i)
+		sv:setValue(sv:pointerToValue())
 	end
 	[trace.traceUpdate({structureChange=false})](self.adTrace)
 	var lp = self.adTrace.logprob:val()
@@ -327,8 +336,10 @@ terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
 	-- Also remember the nonstructural variables
 	if self.adTrace ~= nil then m.delete(self.adTrace) end
 	self.adTrace = [BaseTraceD.deepcopy(ad.num)](currTrace)
-	m.destruct(self.adVars)
-	self.adVars = self.adTrace:freeVars(false, true)
+	m.destruct(self.adNonstructuralVars)
+	self.adNonstructuralVars = self.adTrace:freeVars(false, true)
+	m.destruct(self.adStructuralVars)
+	self.adStructuralVars = self.adTrace:freeVars(true, false)
 
 	-- Initialize the inverse masses for the HMC phase space
 	self:initInverseMasses(currTrace)

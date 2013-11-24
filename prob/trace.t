@@ -565,7 +565,6 @@ local function lookupVariableValueStructural(RandVarType, isstruct, iscond, cond
 	in
 		retval
 	end
-	-- q:printpretty()
 	return q
 end
 
