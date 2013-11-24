@@ -74,6 +74,7 @@ local struct HMCKernel
 {
 	stepSize: double,
 	numSteps: uint,
+	usePrimalLP: bool,
 	stepSizeAdapt: bool,
 	targetAcceptRate: double,
 	adaptationRate: double, 
@@ -88,6 +89,7 @@ local struct HMCKernel
 	momenta: Vector(double),
 	invMasses: Vector(double),
 	adTrace: &BaseTraceAD,
+	dTrace: &BaseTraceD,
 	adNonstructuralVars: Vector(&RandVarAD),
 	adStructuralVars: Vector(&RandVarAD),
 	indepVarNums: Vector(ad.num),
@@ -100,10 +102,12 @@ local struct HMCKernel
 }
 inheritance.dynamicExtend(MCMCKernel, HMCKernel)
 
-terra HMCKernel:__construct(stepSize: double, numSteps: uint, stepSizeAdapt: bool,
-							targetAcceptRate: double, adaptationRate: double)
+terra HMCKernel:__construct(stepSize: double, numSteps: uint, usePrimalLP: bool,
+							stepSizeAdapt: bool, targetAcceptRate: double,
+							adaptationRate: double)
 	self.stepSize = stepSize
 	self.numSteps = numSteps
+	self.usePrimalLP = usePrimalLP
 	self.stepSizeAdapt = stepSizeAdapt
 	self.targetAcceptRate = targetAcceptRate
 	self.adaptationRate = adaptationRate
@@ -116,6 +120,7 @@ terra HMCKernel:__construct(stepSize: double, numSteps: uint, stepSizeAdapt: boo
 	self.momenta = [Vector(double)].stackAlloc()
 	self.invMasses = [Vector(double)].stackAlloc()
 	self.adTrace = nil
+	self.dTrace = nil
 	m.init(self.adNonstructuralVars)
 	m.init(self.adStructuralVars)
 	m.init(self.indepVarNums)
@@ -130,6 +135,7 @@ terra HMCKernel:__destruct() : {}
 	m.destruct(self.momenta)
 	m.destruct(self.gradient)
 	if self.adTrace ~= nil then m.delete(self.adTrace) end
+	if self.dTrace ~= nil then m.delete(self.dTrace) end
 	m.destruct(self.adNonstructuralVars)
 	m.destruct(self.adStructuralVars)
 	m.destruct(self.indepVarNums)
@@ -340,6 +346,12 @@ terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
 	self.adNonstructuralVars = self.adTrace:freeVars(false, true)
 	m.destruct(self.adStructuralVars)
 	self.adStructuralVars = self.adTrace:freeVars(true, false)
+	-- If we're getting final logprobs from the primal program, then
+	--    we also need to make a stratch double trace
+	if self.usePrimalLP then
+		if self.dTrace ~= nil then m.delete(self.dTrace) end
+		self.dTrace = currTrace:deepcopy()
+	end
 
 	-- Initialize the inverse masses for the HMC phase space
 	self:initInverseMasses(currTrace)
@@ -361,6 +373,16 @@ terra HMCKernel:initWithNewTrace(currTrace: &BaseTraceD)
 	--    avoid doing all this work if this kernel is repeatedly
 	--    called (and it will be).
 	self.lastTrace = currTrace
+end
+
+-- Useful utility
+local terra copyNonstructRealsIntoTrace(reals: &Vector(double), trace: &BaseTraceD)
+	var index = 0U
+	var currVars = trace:freeVars(false, true)
+	for i=0,currVars.size do
+		currVars:get(i):setRealComponents(reals, &index)
+	end
+	m.destruct(currVars)
 end
 
 terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
@@ -391,6 +413,14 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 		newlp = self:leapfrog(&pos, &grad)
 	end
 
+	-- If we're using the primal program to calculate final logprobs,
+	--    then we run it now
+	if self.usePrimalLP then
+		copyNonstructRealsIntoTrace(&pos, self.dTrace)
+		[trace.traceUpdate({structureChange=false})](self.dTrace)
+		newlp = self.dTrace.logprob
+	end
+
 	-- Final Hamiltonian
 	var H_new = (self:kineticEnergy() + newlp)/currTrace.temperature 
 
@@ -410,12 +440,7 @@ terra HMCKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
 		self.gradient = grad
 		-- Copy final reals back into currTrace, flush trace to reconstruct
 		-- return value
-		var index = 0U
-		var currVars = currTrace:freeVars(false, true)
-		for i=0,currVars.size do
-			currVars:get(i):setRealComponents(&self.positions, &index)
-		end
-		m.destruct(currVars)
+		copyNonstructRealsIntoTrace(&self.positions, currTrace)
 		[trace.traceUpdate({structureChange=false, factorEval=false})](currTrace)
 		[BaseTraceD.setLogprobFrom(ad.num)](currTrace, self.adTrace)
 	end
@@ -440,12 +465,12 @@ m.addConstructors(HMCKernel)
 
 -- Convenience method for generating new HMCKernels
 local HMC = inf.makeKernelGenerator(
-	terra(stepSize: double, numSteps: uint, stepSizeAdapt: bool,
+	terra(stepSize: double, numSteps: uint, usePrimalLP: bool, stepSizeAdapt: bool,
 		  targetAcceptRate: double, adaptationRate: double)
-		return HMCKernel.heapAlloc(stepSize, numSteps, stepSizeAdapt,
+		return HMCKernel.heapAlloc(stepSize, numSteps, usePrimalLP, stepSizeAdapt,
 								   targetAcceptRate, adaptationRate)
 	end,
-	{stepSize = -1.0, numSteps = 1, stepSizeAdapt = true,
+	{stepSize = -1.0, numSteps = 1, usePrimalLP = false, stepSizeAdapt = true,
 	 targetAcceptRate = 0.65, adaptationRate = 0.05})
 
 
