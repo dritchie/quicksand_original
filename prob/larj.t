@@ -14,6 +14,7 @@ local inf = terralib.require("prob.inference")
 local MCMCKernel = inf.MCMCKernel
 local Vector = terralib.require("vector")
 local rand = terralib.require("prob.random")
+local ad = terralib.require("ad")
 
 local C = terralib.includecstring [[
 #include <math.h>
@@ -288,7 +289,7 @@ end)
 -- The actual LARJ algorithm, as an MCMC kernel
 local InterpolationTraceD = InterpolationTrace(double)
 local GlobalTraceD = GlobalTrace(double)
-local LARJKernel = templatize(function(intervals, stepsPerInterval)
+local LARJKernel = templatize(function(intervals, stepsPerInterval, depthBiasBranchFactor)
 	local struct LARJKernelT
 	{
 		diffusionKernel: &MCMCKernel,
@@ -316,7 +317,23 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval)
 
 		-- Randomly change a structural variable
 		var freevars = newStructTrace:freeVars(true, false)
-		var v = freevars:get(rand.uniformRandomInt(0, freevars.size))
+		var v : &RandVar(double) = nil
+
+		[util.optionally(depthBiasBranchFactor, function() return quote
+			-- Skew variable selection based on trace depth
+			var weights = [Vector(double)].stackAlloc(freevars.size, 0.0)
+			for i=0,freevars.size do
+				var fv = freevars(i)
+				weights(i) = ad.math.pow(depthBiasBranchFactor, -1.0*fv.traceDepth)
+			end
+			v = freevars:get([rand.multinomial_sample(double)](weights))
+			m.destruct(weights)
+		end end)]
+		[util.optionally(not depthBiasBranchFactor, function() return quote
+			-- Select variable uniformly at random
+			v = freevars:get(rand.uniformRandomInt(0, freevars.size))
+		end end)]
+
 		var fwdPropLP, rvsPropLP = v:proposeNewValue()
 		[trace.traceUpdate()](newStructTrace)
 		var oldNumStructVars = freevars.size
@@ -396,7 +413,8 @@ local function LARJ(diffKernelGen, annealKernelGen)
 			end
 		end
 	end,
-	{{"jumpFreq", 0.1}, {"intervals", 0}, {"stepsPerInterval", 0}})
+	{{"jumpFreq", 0.1}, {"intervals", 0}, {"stepsPerInterval", 0},
+	 {"depthBiasBranchFactor", nil}})
 end
 
 
