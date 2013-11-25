@@ -288,91 +288,91 @@ end)
 -- The actual LARJ algorithm, as an MCMC kernel
 local InterpolationTraceD = InterpolationTrace(double)
 local GlobalTraceD = GlobalTrace(double)
-local struct LARJKernel
-{
-	diffusionKernel: &MCMCKernel,
-	intervals: uint,
-	stepsPerInterval: uint,
-	jumpProposalsMade: uint,
-	jumpProposalsAccepted: uint,
-}
-inheritance.dynamicExtend(MCMCKernel, LARJKernel)
+local LARJKernel = templatize(function(intervals, stepsPerInterval)
+	local struct LARJKernelT
+	{
+		diffusionKernel: &MCMCKernel,
+		jumpProposalsMade: uint,
+		jumpProposalsAccepted: uint,
+	}
+	inheritance.dynamicExtend(MCMCKernel, LARJKernelT)
 
--- NOTE: Assumes ownership of 'diffKernel'
-terra LARJKernel:__construct(diffKernel: &MCMCKernel, intervals: uint, stepsPerInterval: uint)
-	self.diffusionKernel = diffKernel
-	self.intervals = intervals
-	self.stepsPerInterval = stepsPerInterval
-	self.jumpProposalsMade = 0
-	self.jumpProposalsAccepted = 0
-end
+	-- NOTE: Assumes ownership of 'diffKernel'
+	terra LARJKernelT:__construct(diffKernel: &MCMCKernel)
+		self.diffusionKernel = diffKernel
+		self.jumpProposalsMade = 0
+		self.jumpProposalsAccepted = 0
+	end
 
-terra LARJKernel:__destruct() : {}
-	m.delete(self.diffusionKernel)
-end
-inheritance.virtual(LARJKernel, "__destruct")
+	terra LARJKernelT:__destruct() : {}
+		m.delete(self.diffusionKernel)
+	end
+	inheritance.virtual(LARJKernelT, "__destruct")
 
-terra LARJKernel:next(currTrace: &BaseTraceD)  : &BaseTraceD
-	self.jumpProposalsMade = self.jumpProposalsMade + 1
-	var oldStructTrace = [&GlobalTraceD](currTrace:deepcopy())
-	var newStructTrace = [&GlobalTraceD](currTrace:deepcopy())
+	terra LARJKernelT:next(currTrace: &BaseTraceD)  : &BaseTraceD
+		self.jumpProposalsMade = self.jumpProposalsMade + 1
+		var oldStructTrace = [&GlobalTraceD](currTrace:deepcopy())
+		var newStructTrace = [&GlobalTraceD](currTrace:deepcopy())
 
-	-- Randomly change a structural variable
-	var freevars = newStructTrace:freeVars(true, false)
-	var v = freevars:get(rand.uniformRandomInt(0, freevars.size))
-	var fwdPropLP, rvsPropLP = v:proposeNewValue()
-	[trace.traceUpdate()](newStructTrace)
-	var oldNumStructVars = freevars.size
-	var newNumStructVars = newStructTrace:numFreeVars(true, false)
-	fwdPropLP = fwdPropLP + newStructTrace.newlogprob - C.log(oldNumStructVars)
-	m.destruct(freevars)
+		-- Randomly change a structural variable
+		var freevars = newStructTrace:freeVars(true, false)
+		var v = freevars:get(rand.uniformRandomInt(0, freevars.size))
+		var fwdPropLP, rvsPropLP = v:proposeNewValue()
+		[trace.traceUpdate()](newStructTrace)
+		var oldNumStructVars = freevars.size
+		var newNumStructVars = newStructTrace:numFreeVars(true, false)
+		fwdPropLP = fwdPropLP + newStructTrace.newlogprob - C.log(oldNumStructVars)
+		m.destruct(freevars)
 
-	-- Do annealing, if more than zero annealing steps specified.
-	var annealingLpRatio = 0.0
-	if self.intervals > 0 and self.stepsPerInterval > 0 then
-		var lerpTrace = InterpolationTraceD.heapAlloc(oldStructTrace, newStructTrace)
-		for ival=0,self.intervals do
-			lerpTrace:setAlpha(ival/(self.intervals-1.0))
-			for step=0,self.stepsPerInterval do
-				annealingLpRatio = annealingLpRatio + lerpTrace.logprob
-				lerpTrace = [&InterpolationTraceD](self.diffusionKernel:next(lerpTrace))
-				annealingLpRatio = annealingLpRatio - lerpTrace.logprob
+		-- Do annealing, if more than zero annealing steps specified.
+		var annealingLpRatio = 0.0
+		[util.optionally(intervals > 0 and stepsPerInterval > 0,
+		function() return quote
+			var lerpTrace = InterpolationTraceD.heapAlloc(oldStructTrace, newStructTrace)
+			for ival=0,intervals do
+				lerpTrace:setAlpha(ival/(intervals-1.0))
+				for step=0,stepsPerInterval do
+					annealingLpRatio = annealingLpRatio + lerpTrace.logprob
+					lerpTrace = [&InterpolationTraceD](self.diffusionKernel:next(lerpTrace))
+					annealingLpRatio = annealingLpRatio - lerpTrace.logprob
+				end
 			end
+			oldStructTrace, newStructTrace = lerpTrace:releaseSubtraces()
+			m.delete(lerpTrace)
+		end end)]
+
+		-- Finalize accept/reject decision
+		rvsPropLP = oldStructTrace:lpDiff(newStructTrace) - C.log(newNumStructVars)
+		var acceptanceProb = (newStructTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP + annealingLpRatio
+		var accepted = newStructTrace.conditionsSatisfied and C.log(rand.random()) < acceptanceProb
+		m.delete(oldStructTrace)
+		if accepted then
+			self.jumpProposalsAccepted = self.jumpProposalsAccepted + 1
+			m.delete(currTrace)
+			return newStructTrace
+		else
+			m.delete(newStructTrace)
+			return currTrace
 		end
-		oldStructTrace, newStructTrace = lerpTrace:releaseSubtraces()
-		m.delete(lerpTrace)
 	end
+	inheritance.virtual(LARJKernelT, "next")
 
-	-- Finalize accept/reject decision
-	rvsPropLP = oldStructTrace:lpDiff(newStructTrace) - C.log(newNumStructVars)
-	var acceptanceProb = (newStructTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP + annealingLpRatio
-	var accepted = newStructTrace.conditionsSatisfied and C.log(rand.random()) < acceptanceProb
-	m.delete(oldStructTrace)
-	if accepted then
-		self.jumpProposalsAccepted = self.jumpProposalsAccepted + 1
-		m.delete(currTrace)
-		return newStructTrace
-	else
-		m.delete(newStructTrace)
-		return currTrace
+	terra LARJKernelT:name() : rawstring return [LARJKernelT.name] end
+	inheritance.virtual(LARJKernelT, "name")
+
+	terra LARJKernelT:stats() : {}
+		C.printf("==JUMP==\nAcceptance ratio: %g (%u/%u)\n",
+			[double](self.jumpProposalsAccepted)/self.jumpProposalsMade,
+			self.jumpProposalsAccepted,
+			self.jumpProposalsMade)
+		C.printf("==ANNEALING==\n")
+		self.diffusionKernel:stats()
 	end
-end
-inheritance.virtual(LARJKernel, "next")
+	inheritance.virtual(LARJKernelT, "stats")
 
-terra LARJKernel:name() : rawstring return [LARJKernel.name] end
-inheritance.virtual(LARJKernel, "name")
-
-terra LARJKernel:stats() : {}
-	C.printf("==JUMP==\nAcceptance ratio: %g (%u/%u)\n",
-		[double](self.jumpProposalsAccepted)/self.jumpProposalsMade,
-		self.jumpProposalsAccepted,
-		self.jumpProposalsMade)
-	C.printf("==ANNEALING==\n")
-	self.diffusionKernel:stats()
-end
-inheritance.virtual(LARJKernel, "stats")
-
-m.addConstructors(LARJKernel)
+	m.addConstructors(LARJKernelT)
+	return LARJKernelT
+end)
 
 
 
@@ -383,15 +383,20 @@ m.addConstructors(LARJKernel)
 local function LARJ(diffKernelGen, annealKernelGen)
 	assert(diffKernelGen)
 	annealKernelGen = annealKernelGen or diffKernelGen
-	return inf.makeKernelGenerator(
-		terra(jumpFreq: double, intervals: uint, stepsPerInterval: uint)
-			var diffKernel = [diffKernelGen()]
-			var jumpKernel = LARJKernel.heapAlloc([annealKernelGen()], intervals, stepsPerInterval)
-			var kernels = [Vector(&MCMCKernel)].stackAlloc():fill(diffKernel, jumpKernel)
-			var freqs = Vector.fromItems(1.0-jumpFreq, jumpFreq)
-			return inf.MultiKernel.heapAlloc(kernels, freqs)
-		end,
-		{jumpFreq = 0.1, intervals = 0, stepsPerInterval = 1})
+	return util.fnWithDefaultArgs(function(jumpFreq, ...)
+		local LARJType = LARJKernel(...)
+		return function()
+			return quote
+				var diffKernel = [diffKernelGen()]
+				var jumpKernel = LARJType.heapAlloc([annealKernelGen()])
+				var kernels = [Vector(&MCMCKernel)].stackAlloc():fill(diffKernel, jumpKernel)
+				var freqs = Vector.fromItems(1.0-jumpFreq, jumpFreq)
+			in
+				inf.MultiKernel.heapAlloc(kernels, freqs)
+			end
+		end
+	end,
+	{{"jumpFreq", 0.1}, {"intervals", 0}, {"stepsPerInterval", 0}})
 end
 
 
