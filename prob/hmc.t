@@ -71,7 +71,9 @@ m.addConstructors(DualAverage)
 
 -- Kernel for doing Hamiltonian Monte Carlo proposals
 -- Only makes proposals to non-structural variables
-local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP, stepSizeAdapt, targetAcceptRate, adaptationRate)
+local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
+									  stepSizeAdapt, targetAcceptRate, adaptationRate,
+									  pmrAlpha)
 	local struct HMCKernelT
 	{
 		stepSize: double,
@@ -180,6 +182,24 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP, stepSizeA
 		for i=0,self.momenta.size do
 			var m = [rand.gaussian_sample(double)](0.0, 1.0) * self.invMasses:get(i)
 			self.momenta:set(i, m)
+		end
+	end
+
+	if pmrAlpha then
+		-- Partial momentum refreshment version of momentum sampling
+		terra HMCKernelT:sampleMomentaPMR()
+			-- Can't do a partial update if we don't yet have an existing
+			--    set of momenta at this dimensionality
+			if self.momenta.size ~= self.positions.size then
+				self:sampleMomenta()
+			-- Otherwise, do a partial update
+			else
+				var coeff = ad.math.sqrt(1.0 - pmrAlpha*pmrAlpha)
+				for i=0,self.momenta.size do
+					var m = [rand.gaussian_sample(double)](0.0, 1.0) * self.invMasses:get(i)
+					self.momenta:set(i, pmrAlpha*self.momenta(i) + coeff*m)
+				end
+			end
 		end
 	end
 
@@ -385,7 +405,8 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP, stepSizeA
 		self:updateInverseMasses(currTrace)
 
 		-- Sample momentum variables
-		self:sampleMomenta()
+		[util.optionally(pmrAlpha, function() return `self:sampleMomentaPMR() end)]
+		[util.optionally(not pmrAlpha, function() return `self:sampleMomenta() end)]
 
 		-- -- NEW VERSION OF TEMPERING: Momentum scaling
 		-- for i=0,self.momenta.size do
@@ -402,6 +423,11 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP, stepSizeA
 		for i=0,numSteps do
 			newlp = self:leapfrog(&pos, &grad)
 		end
+
+		-- If we're doing PMR, we need to negate momentum
+		[util.optionally(pmrAlpha, function() return quote
+			for i=0,self.momenta.size do self.momenta(i) = -self.momenta(i) end
+		end end)]
 
 		-- If we're using the primal program to calculate final logprobs,
 		--    then we run it now
@@ -435,6 +461,12 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP, stepSizeA
 			[BaseTraceD.setLogprobFrom(ad.num)](currTrace, self.adTrace)
 		end
 
+		-- If we're doing PMR, we negate momentum again (so we get momentum
+		--    reversals on rejection, rather than on acceptance)
+		[util.optionally(pmrAlpha, function() return quote
+			for i=0,self.momenta.size do self.momenta(i) = -self.momenta(i) end
+		end end)]
+
 		return currTrace
 	end
 	inheritance.virtual(HMCKernelT, "next")
@@ -461,7 +493,8 @@ local HMC = util.fnWithDefaultArgs(function(...)
 	return function() return `HMCType.heapAlloc() end
 end,
 {{"stepSize", -1.0}, {"numSteps", 1}, {"usePrimalLP", false},
-{"stepSizeAdapt", true}, {"targetAcceptRate", 0.65}, {"adaptationRate", 0.05}})
+ {"stepSizeAdapt", true}, {"targetAcceptRate", 0.65}, {"adaptationRate", 0.05},
+ {"pmrAlpha", nil}})
 
 
 
