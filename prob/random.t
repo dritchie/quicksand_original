@@ -250,17 +250,18 @@ end)
 specialize("poisson_sample", 0, function(V)
 	return terra(mu: int)
 		var k:int = 0
-		while mu > 10 do
-			var m = (7.0/8)*mu
-			var x = [fns.gamma_sample(V)](m, 1.0)
-			if x > mu then
-				return k + [fns.binomial_sample(V)](mu/x, m-1)
+		var mud = [double](mu)
+		while mud > 10 do
+			var m = (7.0/8)*mud
+			var x = [fns.gamma_sample(double)](m, 1.0)
+			if x > mud then
+				return k + [fns.binomial_sample(double)](mud/x, m-1)
 			else
-				mu = mu - x
+				mud = mud - x
 				k = k + 1
 			end
 		end
-		var emu = ad.math.exp(-mu)
+		var emu = ad.math.exp(-mud)
 		var p = 1.0
 		while p > emu do
 			p = p * random()
