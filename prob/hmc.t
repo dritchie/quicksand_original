@@ -492,7 +492,7 @@ local HMC = util.fnWithDefaultArgs(function(...)
 	return function() return `HMCType.heapAlloc() end
 end,
 {{"stepSize", -1.0}, {"numSteps", 1}, {"usePrimalLP", false},
- {"stepSizeAdapt", true}, {"targetAcceptRate", 0.65}, {"adaptationRate", 0.05},
+ {"stepSizeAdapt", true}, {"targetAcceptRate", 0.57}, {"adaptationRate", 0.05},
  {"pmrAlpha", nil}})
 
 
