@@ -64,7 +64,7 @@ specialize("multinomial_sample", 1, function(V, P)
 		repeat
 			probAccum = probAccum + params:get(result)
 			result = result + 1
-		until probAccum > x or result > params.size
+		until probAccum > x or result == params.size
 		return result - 1
 	end
 end)

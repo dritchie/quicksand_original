@@ -18,7 +18,7 @@ local C = terralib.includecstring [[
 #include <math.h>
 inline void flush() { fflush(stdout); }
 #include <sys/time.h>
-double currentTimeInSeconds() {
+inline double currentTimeInSeconds() {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return tv.tv_sec + tv.tv_usec / 1000000.0;
