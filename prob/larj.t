@@ -155,7 +155,7 @@ InterpolationTrace = templatize(function(ProbType)
 		--   all variables unique to trace1, as well as variables in both
 		--   traces that share the same address
 		var it = self.trace1.vars:iterator()
-		util.foreach(it, [quote
+		[util.foreach(it, quote
 			var k, v1 = it:keyvalPointer()
 			var v2 = self.trace2.vars:getPointer(@k)
 			var n1 = v1.size
@@ -189,11 +189,11 @@ InterpolationTrace = templatize(function(ProbType)
 					self.newnonstructs:push(true)
 				end
 			end
-		end])
+		end)]
 		-- Now we have to look through all addresses in trace2 to find any
 		--    other variables unique to trace2.
 		it = self.trace2.vars:iterator()
-		util.foreach(it, [quote
+		[util.foreach(it, quote
 			var k, v2 = it:keyvalPointer()
 			var v1 = self.trace1.vars:getPointer(@k)
 			if v1 == nil then
@@ -205,7 +205,7 @@ InterpolationTrace = templatize(function(ProbType)
 					end
 				end
 			end
-		end])
+		end)]
 	end
 
 	terra InterpolationTraceT:updateLPCond()

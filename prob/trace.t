@@ -253,7 +253,7 @@ GlobalTrace = templatize(function(ProbType)
 			var old2new = [HashMap(&RVarP, &RVar)].stackAlloc()
 			--    First copy the name --> var map
 			var it = other.vars:iterator()
-			util.foreach(it, [quote
+			[util.foreach(it, quote
 				var k, v = it:keyvalPointer()
 				var vlistp = (self.vars:getOrCreatePointer(@k))
 				for i=0,v.size do
@@ -262,7 +262,7 @@ GlobalTrace = templatize(function(ProbType)
 					old2new:put(oldvar, newvar)
 					vlistp:push(newvar)
 				end
-			end])
+			end)]
 			--   Then copy the flat var list
 			self.varlist:resize(other.varlist.size)
 			for i=0,other.varlist.size do
@@ -319,7 +319,7 @@ GlobalTrace = templatize(function(ProbType)
 	terra GlobalTraceT:lpDiff(other: &GlobalTraceT)
 		var total = 0.0
 		var it = self.vars:iterator()
-		util.foreach(it, [quote
+		[util.foreach(it, quote
 			var k, v1 = it:keyvalPointer()
 			var v2 = other.vars:getPointer(@k)
 			var n1 = v1.size
@@ -328,7 +328,7 @@ GlobalTrace = templatize(function(ProbType)
 			for i=n2,n1 do
 				total = total + v1:get(i).logprob
 			end
-		end])
+		end)]
 		return total
 	end
 
@@ -401,10 +401,10 @@ RandExecTrace = templatize(function(ProbType, computation)
 		while not self.conditionsSatisfied do
 			-- Clear out the existing vars
 			var it = self.vars:iterator()
-			util.foreach(it, [quote
+			[util.foreach(it, quote
 				var vlistp = it:valPointer()
 				for i=0,vlistp.size do m.delete(vlistp:get(i)) end
-			end])
+			end)]
 			self.vars:clear()
 			-- Run the program forward
 			[traceUpdate()](self)
@@ -464,12 +464,12 @@ RandExecTrace = templatize(function(ProbType, computation)
 			[structureChange and 
 			quote
 				var it = self.vars:iterator()
-				util.foreach(it, [quote
+				[util.foreach(it, quote
 					var vlistp = it:valPointer()
 					for i=0,vlistp.size do
 						vlistp:get(i).isActive = false
 					end
-				end])
+				end)]
 			end
 				or
 			quote end]
@@ -487,7 +487,7 @@ RandExecTrace = templatize(function(ProbType, computation)
 			[structureChange and
 			quote
 				var it = self.vars:iterator()
-				util.foreach(it, [quote
+				[util.foreach(it, quote
 					var vlistp = it:valPointer()
 					-- For common use cases (e.g. variables created in loops),
 					-- iterating from last var to first will make removal more
@@ -501,7 +501,7 @@ RandExecTrace = templatize(function(ProbType, computation)
 							i = i + 1
 						end
 					end
-				end])
+				end)]
 			end
 				or
 			quote end]
