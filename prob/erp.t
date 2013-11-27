@@ -244,9 +244,9 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 			local n = paramFieldNames[i]
 			table.insert(checkexps,
 				quote
-					if not (self.[n] == p) then
+					if not (self.[n] == [p]) then
 						m.destruct(self.[n])
-						self.[n] = m.copy(p)
+						self.[n] = m.copy([p])
 						hasChanges = true
 					end
 				end)
@@ -306,6 +306,12 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		[ParentClass.HasRealComponents and (quote self:updateLogprob() end) or (quote end)]
 	end
 	inheritance.virtual(RandVarFromFunctionsT, "setRealComponents")
+
+	-- Rescore the ERP
+	terra RandVarFromFunctionsT:rescore() : {}
+		self:updateLogprob()
+	end
+	inheritance.virtual(RandVarFromFunctionsT, "rescore")
 
 	m.addConstructors(RandVarFromFunctionsT)
 	return RandVarFromFunctionsT

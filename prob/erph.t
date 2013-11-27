@@ -53,6 +53,7 @@ RandVar = templatize(function(ProbType)
 	inheritance.purevirtual(RandVarT, "setValue", {&opaque}->{})
 	inheritance.purevirtual(RandVarT, "getRealComponents", {&Vector(ProbType)}->{})
 	inheritance.purevirtual(RandVarT, "setRealComponents", {&Vector(ProbType), &uint}->{})
+	inheritance.purevirtual(RandVarT, "rescore", {}->{})
 
 	RandVarT.deepcopy = virtualTemplate(RandVarT, "deepcopy", function(P) return {}->{&RandVar(P)} end)
 

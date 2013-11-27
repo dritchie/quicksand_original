@@ -150,8 +150,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		-- Also need to force logprob updates for all the structural vars, since their
 		--    logprob values will be invalidated be previous calls to grad()
 		for i=0,self.adStructuralVars.size do
-			var sv = self.adStructuralVars(i)
-			sv:setValue(sv:pointerToValue())
+			self.adStructuralVars(i):rescore()
 		end
 		[trace.traceUpdate({structureChange=false})](self.adTrace)
 		var lp = self.adTrace.logprob:val()
@@ -367,7 +366,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		self:initInverseMasses(currTrace)
 
 		-- Initialize the gradient
-		self:logProbAndGrad(&self.positions, &self.gradient)
+		self:logProbAndGrad(&self.positions, &self.gradient) 
 
 		-- If the stepSize wasn't specified, try to find a decent one.
 		if self.stepSize <= 0.0 then

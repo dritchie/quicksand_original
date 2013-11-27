@@ -21,7 +21,6 @@ local C = terralib.includecstring [[
 #include <stdio.h>
 ]]
 
-
 -- Random variable which wraps 2 random variables from different
 --    traces but which have the same semantic meaning.
 -- These are used as abstractions for simultaneously referring to both
@@ -58,12 +57,21 @@ local InterpolationRandVar = templatize(function(ProbType)
 	end
 	inheritance.virtual(InterpolationRandVarT, "valueTypeID")
 
+	terra InterpolationRandVarT:checkInvalidStructInterpOp()
+		if self.isStructural then
+			util.fatalError("Invalid operation on a structural InterpolationRandVar\n")
+		end
+	end
+	util.inline(InterpolationRandVarT.methods.checkInvalidStructInterpOp)
+
 	terra InterpolationRandVarT:pointerToValue() : &opaque
+		self:checkInvalidStructInterpOp()
 		return self.rv1:pointerToValue()
 	end
 	inheritance.virtual(InterpolationRandVarT, "pointerToValue")
 
 	terra InterpolationRandVarT:proposeNewValue() : {ProbType, ProbType}
+		self:checkInvalidStructInterpOp()
 		var fwdPropLP, rvsPropLP = self.rv1:proposeNewValue()
 		self.rv2:setValue(self.rv1:pointerToValue())
 		self.logprob = self.rv1.logprob
@@ -72,6 +80,7 @@ local InterpolationRandVar = templatize(function(ProbType)
 	inheritance.virtual(InterpolationRandVarT, "proposeNewValue")
 
 	terra InterpolationRandVarT:setValue(valptr: &opaque) : {}
+		self:checkInvalidStructInterpOp()
 		self.rv1:setValue(valptr)
 		self.rv2:setValue(valptr)
 		self.logprob = self.rv1.logprob
@@ -79,11 +88,13 @@ local InterpolationRandVar = templatize(function(ProbType)
 	inheritance.virtual(InterpolationRandVarT, "setValue")
 
 	terra InterpolationRandVarT:getRealComponents(comps: &Vector(ProbType)) : {}
+		self:checkInvalidStructInterpOp()
 		self.rv1:getRealComponents(comps)
 	end
 	inheritance.virtual(InterpolationRandVarT, "getRealComponents")
 
 	terra InterpolationRandVarT:setRealComponents(comps: &Vector(ProbType), index: &uint) : {}
+		self:checkInvalidStructInterpOp()
 		var i = @index
 		self.rv1:setRealComponents(comps, index)
 		@index = i
@@ -91,6 +102,12 @@ local InterpolationRandVar = templatize(function(ProbType)
 		self.logprob = self.rv1.logprob
 	end
 	inheritance.virtual(InterpolationRandVarT, "setRealComponents")
+
+	terra InterpolationRandVarT:rescore() : {}
+		self.rv1:rescore()
+		self.rv2:rescore()
+	end
+	inheritance.virtual(InterpolationRandVarT, "rescore")
 
 	m.addConstructors(InterpolationRandVarT)
 	return InterpolationRandVarT
@@ -134,6 +151,9 @@ InterpolationTrace = templatize(function(ProbType)
 		self.oldnonstructs = [Vector(bool)].stackAlloc()
 		self.newnonstructs = [Vector(bool)].stackAlloc()
 		self.interpvars = [Vector(&InterpolationRandVarT)].stackAlloc()
+		-- Look through all the addresses in trace1. This will give us
+		--   all variables unique to trace1, as well as variables in both
+		--   traces that share the same address
 		var it = self.trace1.vars:iterator()
 		util.foreach(it, [quote
 			var k, v1 = it:keyvalPointer()
@@ -167,6 +187,22 @@ InterpolationTrace = templatize(function(ProbType)
 				if not v2:get(i).isStructural then
 					self.oldnonstructs:push(false)
 					self.newnonstructs:push(true)
+				end
+			end
+		end])
+		-- Now we have to look through all addresses in trace2 to find any
+		--    other variables unique to trace2.
+		it = self.trace2.vars:iterator()
+		util.foreach(it, [quote
+			var k, v2 = it:keyvalPointer()
+			var v1 = self.trace1.vars:getPointer(@k)
+			if v1 == nil then
+				for i=0,v2.size do
+					self.varlist:push(v2:get(i))
+					if not v2:get(i).isStructural then
+						self.oldnonstructs:push(false)
+						self.newnonstructs:push(true)
+					end
 				end
 			end
 		end])
@@ -266,8 +302,8 @@ InterpolationTrace = templatize(function(ProbType)
 		return terra(self: &InterpolationTraceT, other: &BaseTrace(P))
 			var otherDyn = [&InterpolationTrace(P)](other)
 			self.logprob = val(other.logprob)
-			self.rv1.logprob = val(other.rv1.logprob)
-			self.rv2.logprob = val(other.rv2.logprob)
+			self.trace1.logprob = val(otherDyn.trace1.logprob)
+			self.trace2.logprob = val(otherDyn.trace2.logprob)
 		end
 	end)
 
@@ -341,6 +377,8 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, depthBiasBra
 		fwdPropLP = fwdPropLP + newStructTrace.newlogprob - C.log(oldNumStructVars)
 		m.destruct(freevars)
 
+		-- C.printf("oldnum: %u, newnum: %u      \n", oldStructTrace.varlist.size, newStructTrace.varlist.size)
+
 		-- Do annealing, if more than zero annealing steps specified.
 		var annealingLpRatio = 0.0
 		[util.optionally(intervals > 0 and stepsPerInterval > 0,
@@ -405,7 +443,8 @@ local function LARJ(diffKernelGen, annealKernelGen)
 		return function()
 			return quote
 				var diffKernel = [diffKernelGen()]
-				var jumpKernel = LARJType.heapAlloc([annealKernelGen()])
+				var annealKernel = [annealKernelGen()]
+				var jumpKernel = LARJType.heapAlloc(annealKernel)
 				var kernels = [Vector(&MCMCKernel)].stackAlloc():fill(diffKernel, jumpKernel)
 				var freqs = Vector.fromItems(1.0-jumpFreq, jumpFreq)
 			in
@@ -413,7 +452,7 @@ local function LARJ(diffKernelGen, annealKernelGen)
 			end
 		end
 	end,
-	{{"jumpFreq", 0.1}, {"intervals", 0}, {"stepsPerInterval", 0},
+	{{"jumpFreq", 0.1}, {"intervals", 0}, {"stepsPerInterval", 1},
 	 {"depthBiasBranchFactor", nil}})
 end
 
