@@ -577,6 +577,15 @@ erp.gamma =
 makeERP(random.gamma_sample,
 		random.gamma_logprob)
 
+-- Parameters are more intuitive, I think
+erp.gammaMeanShape = spec.specializable(function(...)
+	local paramTable = spec.paramListToTable(...)
+	return macro(function(mean, shape, opstruct)
+		opstruct = opstruct or `{}
+		return `[erp.gamma(paramTable)](shape, mean/shape, opstruct)
+	end)
+end)
+
 erp.beta = 
 makeERP(random.beta_sample,
 		random.beta_logprob)
