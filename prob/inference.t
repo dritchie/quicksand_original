@@ -37,7 +37,7 @@ inheritance.purevirtual(MCMCKernel, "name", {}->{rawstring})
 
 
 -- The basic random walk MH kernel
-local RandomWalkKernel = templatize(function(structs, nonstructs, depthBiasBranchFactor)
+local RandomWalkKernel = templatize(function(structs, nonstructs)
 
 	local struct RandomWalkKernelT
 	{
@@ -66,21 +66,8 @@ local RandomWalkKernel = templatize(function(structs, nonstructs, depthBiasBranc
 		else
 			nextTrace = currTrace:deepcopy()
 			var freevars = nextTrace:freeVars(structs, nonstructs)
-			var v : &erp.RandVar(double) = nil
-			[util.optionally(depthBiasBranchFactor, function() return quote
-				-- Skew variable selection based on trace depth
-				var weights = [Vector(double)].stackAlloc(freevars.size, 0.0)
-				for i=0,freevars.size do
-					var fv = freevars(i)
-					weights(i) = ad.math.pow(depthBiasBranchFactor, -1.0*fv.traceDepth)
-				end
-				v = freevars:get([rand.multinomial_sample(double)](weights))
-				m.destruct(weights)
-			end end)]
-			[util.optionally(not depthBiasBranchFactor, function() return quote
-				-- Select variable uniformly at random
-				v = freevars:get(rand.uniformRandomInt(0, freevars.size))
-			end end)]
+			-- Select variable uniformly at random
+			var v = freevars:get(rand.uniformRandomInt(0, freevars.size))
 			var fwdPropLP, rvsPropLP = v:proposeNewValue()
 			if v.isStructural then
 				[trace.traceUpdate()](nextTrace)
@@ -128,7 +115,7 @@ local RandomWalk = util.fnWithDefaultArgs(function(...)
 	local RWType = RandomWalkKernel(...)
 	return function() return `RWType.heapAlloc() end
 end,
-{{"structs", true}, {"nonstructs", true}, {"depthBiasBranchFactor", nil}})
+{{"structs", true}, {"nonstructs", true}})
 
 
 

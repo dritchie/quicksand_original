@@ -15,6 +15,7 @@ local MCMCKernel = inf.MCMCKernel
 local Vector = terralib.require("vector")
 local rand = terralib.require("prob.random")
 local ad = terralib.require("ad")
+local DualAverage = terralib.require("prob.dualAverage")
 
 local C = terralib.includecstring [[
 #include <math.h>
@@ -325,12 +326,15 @@ end)
 -- The actual LARJ algorithm, as an MCMC kernel
 local InterpolationTraceD = InterpolationTrace(double)
 local GlobalTraceD = GlobalTrace(double)
-local LARJKernel = templatize(function(intervals, stepsPerInterval, depthBiasBranchFactor)
+local LARJKernel = templatize(function(intervals, stepsPerInterval, doDepthBiasedSelection,
+	                                   branchFactor, branchFactorAdapt, targetAcceptRate, adaptRate)
 	local struct LARJKernelT
 	{
 		diffusionKernel: &MCMCKernel,
 		jumpProposalsMade: uint,
 		jumpProposalsAccepted: uint,
+		currBranchFactor: double,
+		adapter: DualAverage
 	}
 	inheritance.dynamicExtend(MCMCKernel, LARJKernelT)
 
@@ -339,12 +343,24 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, depthBiasBra
 		self.diffusionKernel = diffKernel
 		self.jumpProposalsMade = 0
 		self.jumpProposalsAccepted = 0
+		self.currBranchFactor = branchFactor
+		self.adapter = DualAverage.stackAlloc(branchFactor, targetAcceptRate, adaptRate)
 	end
 
 	terra LARJKernelT:__destruct() : {}
 		m.delete(self.diffusionKernel)
 	end
 	inheritance.virtual(LARJKernelT, "__destruct")
+
+	terra LARJKernelT:updateAdaptiveBranchFactor(d: double)
+		var e = ad.math.exp(d)
+		if e > 1.0 then e = 1.0 end
+		-- Suppres NaNs
+		if not (e == e) then e = 0.0 end
+		var agrad = targetAcceptRate - e
+		-- Dual averaging
+		self.currBranchFactor = self.adapter:update(agrad)
+	end
 
 	terra LARJKernelT:next(currTrace: &BaseTraceD)  : &BaseTraceD
 		self.jumpProposalsMade = self.jumpProposalsMade + 1
@@ -355,17 +371,17 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, depthBiasBra
 		var freevars = newStructTrace:freeVars(true, false)
 		var v : &RandVar(double) = nil
 
-		[util.optionally(depthBiasBranchFactor, function() return quote
+		[util.optionally(doDepthBiasedSelection, function() return quote
 			-- Skew variable selection based on trace depth
 			var weights = [Vector(double)].stackAlloc(freevars.size, 0.0)
 			for i=0,freevars.size do
 				var fv = freevars(i)
-				weights(i) = ad.math.pow(depthBiasBranchFactor, -1.0*fv.traceDepth)
+				weights(i) = ad.math.pow(self.currBranchFactor, -1.0*fv.traceDepth)
 			end
 			v = freevars:get([rand.multinomial_sample(double)](weights))
 			m.destruct(weights)
 		end end)]
-		[util.optionally(not depthBiasBranchFactor, function() return quote
+		[util.optionally(not doDepthBiasedSelection, function() return quote
 			-- Select variable uniformly at random
 			v = freevars:get(rand.uniformRandomInt(0, freevars.size))
 		end end)]
@@ -376,8 +392,6 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, depthBiasBra
 		var newNumStructVars = newStructTrace:numFreeVars(true, false)
 		fwdPropLP = fwdPropLP + newStructTrace.newlogprob - C.log(oldNumStructVars)
 		m.destruct(freevars)
-
-		-- C.printf("oldnum: %u, newnum: %u      \n", oldStructTrace.varlist.size, newStructTrace.varlist.size)
 
 		-- Do annealing, if more than zero annealing steps specified.
 		var annealingLpRatio = 0.0
@@ -396,9 +410,15 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, depthBiasBra
 			m.delete(lerpTrace)
 		end end)]
 
-		-- Finalize accept/reject decision
 		rvsPropLP = oldStructTrace:lpDiff(newStructTrace) - C.log(newNumStructVars)
 		var acceptanceProb = (newStructTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP + annealingLpRatio
+
+		-- Adapt branchFactor, if requested
+		[util.optionally(doDepthBiasedSelection and branchFactorAdapt, function()
+			return `self:updateAdaptiveBranchFactor(acceptanceProb)
+		end)]
+		
+		-- Finalize accept/reject decision
 		var accepted = newStructTrace.conditionsSatisfied and C.log(rand.random()) < acceptanceProb
 		m.delete(oldStructTrace)
 		if accepted then
@@ -453,9 +473,9 @@ local function LARJ(diffKernelGen, annealKernelGen)
 		end
 	end,
 	{{"jumpFreq", 0.1}, {"intervals", 0}, {"stepsPerInterval", 1},
-	 {"depthBiasBranchFactor", nil}})
+	 {"doDepthBiasedSelection", false}, {"branchFactor", 1.0},
+	 {"branchFactorAdapt", true}, {"targetAcceptRate", 0.25}, {"adaptRate", 0.05}})
 end
-
 
 return
 {
