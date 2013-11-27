@@ -241,44 +241,44 @@ end,
 
 
 -- MCMC Kernel that probabilistically selects between multiple sub-kernels
-local struct MultiKernel
-{
-	kernels: Vector(&MCMCKernel),
-	freqs: Vector(double)
-}
-inheritance.dynamicExtend(MCMCKernel, MultiKernel)
+local MultiKernel = templatize(function(selectFn)
+	local struct MultiKernelT
+	{
+		kernels: Vector(&MCMCKernel)
+	}
+	inheritance.dynamicExtend(MCMCKernel, MultiKernelT)
 
--- NOTE: Assumes ownership of arguments (read: does not copy)
-terra MultiKernel:__construct(kernels: Vector(&MCMCKernel), freqs: Vector(double))
-	self.kernels = kernels
-	self.freqs = freqs
-end
-
-terra MultiKernel:__destruct() : {}
-	for i=0,self.kernels.size do m.delete(self.kernels:get(i)) end
-	m.destruct(self.kernels)
-	m.destruct(self.freqs)
-end
-inheritance.virtual(MultiKernel, "__destruct")
-
-terra MultiKernel:next(currTrace: &BaseTraceD) : &BaseTraceD
-	var whichKernel = [rand.multinomial_sample(double)](self.freqs)
-	return self.kernels:get(whichKernel):next(currTrace)
-end
-inheritance.virtual(MultiKernel, "next")
-
-terra MultiKernel:name() : rawstring return [MultiKernel.name] end
-inheritance.virtual(MultiKernel, "name")
-
-terra MultiKernel:stats() : {}
-	for i=0,self.kernels.size do
-		C.printf("------ Kernel %d (%s) ------\n", i+1, self.kernels:get(i):name())
-		self.kernels:get(i):stats()
+	-- NOTE: Assumes ownership of arguments (read: does not copy)
+	terra MultiKernelT:__construct(kernels: Vector(&MCMCKernel))
+		self.kernels = kernels
 	end
-end
-inheritance.virtual(MultiKernel, "stats")
 
-m.addConstructors(MultiKernel)
+	terra MultiKernelT:__destruct() : {}
+		for i=0,self.kernels.size do m.delete(self.kernels:get(i)) end
+		m.destruct(self.kernels)
+	end
+	inheritance.virtual(MultiKernelT, "__destruct")
+
+	terra MultiKernelT:next(currTrace: &BaseTraceD) : &BaseTraceD
+		var kernel = selectFn(&self.kernels, currTrace)
+		return kernel:next(currTrace)
+	end
+	inheritance.virtual(MultiKernelT, "next")
+
+	terra MultiKernelT:name() : rawstring return [MultiKernelT.name] end
+	inheritance.virtual(MultiKernelT, "name")
+
+	terra MultiKernelT:stats() : {}
+		for i=0,self.kernels.size do
+			C.printf("------ Kernel %d (%s) ------\n", i+1, self.kernels:get(i):name())
+			self.kernels:get(i):stats()
+		end
+	end
+	inheritance.virtual(MultiKernelT, "stats")
+
+	m.addConstructors(MultiKernelT)
+	return MultiKernelT
+end)
 
 
 

@@ -459,20 +459,40 @@ local function LARJ(diffKernelGen, annealKernelGen)
 	assert(diffKernelGen)
 	annealKernelGen = annealKernelGen or diffKernelGen
 	return util.fnWithDefaultArgs(function(jumpFreq, ...)
+		local haveManualJumpFreq = jumpFreq > 0.0
 		local LARJType = LARJKernel(...)
+		-- If a desired jump frequency is provided, then we use that
+		-- Otherwise, we do jumps with freq. proportional to the % of struct. vars.
+		local selectFn = terra(kernels: &Vector(&inf.MCMCKernel), currTrace: &BaseTraceD)
+			var jumpThresh = 0.0
+			[util.optionally(haveManualJumpFreq, function() return quote
+				jumpThresh = jumpFreq
+			end end)]
+			[util.optionally(not haveManualJumpFreq, function() return quote
+				var numstructs = currTrace:numFreeVars(true, false)
+				var numnonstructs = currTrace:numFreeVars(false, true)
+				jumpThresh = [double](numstructs)/(numstructs+numnonstructs)
+			end end)]
+			var r = rand.random()
+			if r < jumpThresh then
+				return kernels(1)
+			else
+				return kernels(0)
+			end
+		end
+		local MultiKernelT = inf.MultiKernel(selectFn)
 		return function()
 			return quote
 				var diffKernel = [diffKernelGen()]
 				var annealKernel = [annealKernelGen()]
 				var jumpKernel = LARJType.heapAlloc(annealKernel)
 				var kernels = [Vector(&MCMCKernel)].stackAlloc():fill(diffKernel, jumpKernel)
-				var freqs = Vector.fromItems(1.0-jumpFreq, jumpFreq)
 			in
-				inf.MultiKernel.heapAlloc(kernels, freqs)
+				MultiKernelT.heapAlloc(kernels)
 			end
 		end
 	end,
-	{{"jumpFreq", 0.1}, {"intervals", 0}, {"stepsPerInterval", 1},
+	{{"jumpFreq", 0.0}, {"intervals", 0}, {"stepsPerInterval", 1},
 	 {"doDepthBiasedSelection", false}, {"branchFactor", 1.0},
 	 {"branchFactorAdapt", true}, {"targetAcceptRate", 0.25}, {"adaptRate", 0.05}})
 end

@@ -25,6 +25,7 @@ local C = terralib.includecstring [[
 local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 									  stepSizeAdapt, targetAcceptRate, adaptationRate,
 									  pmrAlpha)
+	local doingPMR = pmrAlpha > 0.0
 	local struct HMCKernelT
 	{
 		stepSize: double,
@@ -135,7 +136,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end
 	end
 
-	if pmrAlpha then
+	if doingPMR then
 		-- Partial momentum refreshment version of momentum sampling
 		terra HMCKernelT:sampleMomentaPMR()
 			-- Can't do a partial update if we don't yet have an existing
@@ -355,8 +356,8 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		self:updateInverseMasses(currTrace)
 
 		-- Sample momentum variables
-		[util.optionally(pmrAlpha, function() return `self:sampleMomentaPMR() end)]
-		[util.optionally(not pmrAlpha, function() return `self:sampleMomenta() end)]
+		[util.optionally(doingPMR, function() return `self:sampleMomentaPMR() end)]
+		[util.optionally(not doingPMR, function() return `self:sampleMomenta() end)]
 
 		-- -- NEW VERSION OF TEMPERING: Momentum scaling
 		-- for i=0,self.momenta.size do
@@ -375,7 +376,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end
 
 		-- If we're doing PMR, we need to negate momentum
-		[util.optionally(pmrAlpha, function() return quote
+		[util.optionally(doingPMR, function() return quote
 			for i=0,self.momenta.size do self.momenta(i) = -self.momenta(i) end
 		end end)]
 
@@ -413,7 +414,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 
 		-- If we're doing PMR, we negate momentum again (so we get momentum
 		--    reversals on rejection, rather than on acceptance)
-		[util.optionally(pmrAlpha, function() return quote
+		[util.optionally(doingPMR, function() return quote
 			for i=0,self.momenta.size do self.momenta(i) = -self.momenta(i) end
 		end end)]
 
@@ -444,7 +445,7 @@ local HMC = util.fnWithDefaultArgs(function(...)
 end,
 {{"stepSize", -1.0}, {"numSteps", 1}, {"usePrimalLP", false},
  {"stepSizeAdapt", true}, {"targetAcceptRate", 0.57}, {"adaptationRate", 0.05},
- {"pmrAlpha", nil}})
+ {"pmrAlpha", 0.0}})
 
 
 
