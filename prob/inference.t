@@ -370,6 +370,23 @@ local Sample = templatize(function(ValType)
 	return Samp
 end)
 
+local function forwardSample(computation, numsamps)
+	computation = spec.probcomp(computation)
+	local comp = computation()
+	local CompType = comp:getdefinitions()[1]:gettype()
+	local RetValType = CompType.returns[1]
+	local terra fn()
+		var samps = [Vector(Sample(RetValType))].stackAlloc()
+		for i=0,numsamps do
+			var retval = comp()
+			samps:push([Sample(RetValType)].stackAlloc(retval, 0.0))
+			m.destruct(retval)
+		end
+		return samps
+	end
+	return `fn()
+end
+
 -- Single-chain MCMC
 -- params are: verbose, numsamps, lag, burnin
 -- returns a Vector of samples, where a sample is a
@@ -474,6 +491,7 @@ return
 		RandomWalk = RandomWalk,
 		-- ADRandomWalk = ADRandomWalk,
 		Schedule = Schedule,
+		forwardSample = forwardSample,
 		mcmc = mcmc,
 		rejectionSample = rejectionSample,
 		mean = mean,
