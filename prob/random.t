@@ -247,21 +247,20 @@ specialize("binomial_logprob", 1, function(V, P)
 	end
 end)
 
-specialize("poisson_sample", 0, function(V)
-	return terra(mu: int)
+specialize("poisson_sample", 1, function(V, P)
+	return terra(mu: P)
 		var k:int = 0
-		var mud = [double](mu)
-		while mud > 10 do
-			var m = (7.0/8)*mud
-			var x = [fns.gamma_sample(double)](m, 1.0)
-			if x > mud then
-				return k + [fns.binomial_sample(double)](mud/x, m-1)
+		while mu > 10 do
+			var m = (7.0/8)*mu
+			var x = [fns.gamma_sample(P)](m, 1.0)
+			if x > mu then
+				return k + [fns.binomial_sample(P)](mu/x, m-1)
 			else
-				mud = mud - x
+				mu = mu - x
 				k = k + 1
 			end
 		end
-		var emu = ad.math.exp(-mud)
+		var emu = ad.math.exp(-mu)
 		var p = 1.0
 		while p > emu do
 			p = p * random()
@@ -295,8 +294,8 @@ local terra lnfact(x: int)
 	return ssum
 end
 
-specialize("poisson_logprob", 0, function(V)
-	return terra(k: int, mu: int) : V
+specialize("poisson_logprob", 1, function(V, P)
+	return terra(k: int, mu: P) : V
 		return k * ad.math.log(mu) - mu - lnfact(k)
 	end	
 end)
