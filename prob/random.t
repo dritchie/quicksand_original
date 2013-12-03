@@ -248,13 +248,13 @@ specialize("binomial_logprob", 1, function(V, P)
 end)
 
 specialize("poisson_sample", 1, function(V, P)
-	return terra(mu: P)
+	return terra(mu: P) : int
 		var k:int = 0
 		while mu > 10 do
 			var m = (7.0/8)*mu
 			var x = [fns.gamma_sample(P)](m, 1.0)
 			if x > mu then
-				return k + [fns.binomial_sample(P)](mu/x, m-1)
+				return k + [fns.binomial_sample(P)](mu/x, ad.val(m-1))
 			else
 				mu = mu - x
 				k = k + 1
