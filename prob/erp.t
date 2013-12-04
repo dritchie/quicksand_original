@@ -242,7 +242,20 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		local checkexps = {}
 		for i,p in ipairs(paramsyms) do
 			local n = paramFieldNames[i]
-			table.insert(checkexps,
+			-- We must *always* refresh params / updated logprobs
+			--   if we're using dual numbers. Otherwise, nums could
+			--   become stale after memory pool wipes and we'll end
+			--   up with mysterious segfaults.
+			if scalarType == ad.num then
+				table.insert(checkexps,
+				quote
+					m.destruct(self.[n])
+					self.[n] = m.copy([p])
+					hasChanges = true
+				end)
+			-- Otherwise, only refresh if something has changed.
+			else
+				table.insert(checkexps,
 				quote
 					if not (self.[n] == [p]) then
 						m.destruct(self.[n])
@@ -250,6 +263,7 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 						hasChanges = true
 					end
 				end)
+			end
 		end
 		return checkexps
 	end
