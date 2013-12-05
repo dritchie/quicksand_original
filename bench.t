@@ -1,6 +1,4 @@
-local prob = terralib.require("prob")
-local util = terralib.require("util")
-util.openModule(prob)
+terralib.require("prob")
 local m = terralib.require("mem")
 
 
@@ -31,28 +29,40 @@ end
 -- Are we doing the nonstructural optimization trick?
 -- Turn this on/off to see performance change
 local doingNonstructOpt = true
-local function maybenot()
+local maybenot = macro(function()
 	return not doingNonstructOpt
-end
+end)
 
 
 local function genbenchmarks()
 	return terra()
-		var t1 = C.currentTimeInSeconds()
-
-		-- Flat model with a huge number of variables
+		-- -- Flat model with a huge number of variables
+		-- [run(function()
+		-- 	return terra()
+		-- 		var counter = 0
+		-- 		for i=0,5000 do
+		-- 			counter = counter + int(flip(0.5, {structural=maybenot()}))
+		-- 		end
+		-- 		return counter
+		-- 	end
+		-- end)]
+		
+		-- Highly recursive model
 		[run(function()
-			return terra()
-				var counter = 0
-				for i=0,5000 do
-					counter = counter + int([flip(0.5, {structural=maybenot()})])
+			local rec = pfn()
+			rec:define(terra(depth: int) : int
+				if depth < 1000 then
+					return int(flip(0.5, {structural=maybenot()})) + rec(depth+1)
+				else
+					return 0.0
 				end
-				return counter
+			end)
+			return terra()
+				var sum = rec(0)
+				condition(sum == 500)
+				return sum
 			end
 		end)]
-
-		var t2 = C.currentTimeInSeconds()
-		C.printf("Done! Time: %g\n", t2-t1)
 	end
 end
 
@@ -60,9 +70,7 @@ doingNonstructOpt = false
 print("Without nonstruct optimization:")
 local dobenchmarks = genbenchmarks()
 dobenchmarks()
-dobenchmarks()
 doingNonstructOpt = true
-print("With nonstruct optimization")
+print("With nonstruct optimization:")
 dobenchmarks = genbenchmarks()
-dobenchmarks()
 dobenchmarks()
