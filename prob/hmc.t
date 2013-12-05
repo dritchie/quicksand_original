@@ -112,19 +112,46 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 
 	-- TODO: The updates in this function are a good candidate for vectorized multiply/add.
 	terra HMCKernelT:leapfrog(pos: &Vector(double), grad: &Vector(double))
+
+		-- -- TEST: different step sizes per variable
+		-- var stepSizes = [Vector(double)].stackAlloc(grad.size, 0.0)
+		-- var minGradMag = [math.huge]
+		-- for i=0,grad.size do
+		-- 	-- We want the minimum, non-zero magnitude
+		-- 	if grad(i) ~= 0.0 then
+		-- 		minGradMag = ad.math.fmin(minGradMag, ad.math.fabs(grad(i)))
+		-- 	end
+		-- end
+		-- -- C.printf("--------------                \n", self.stepSize)
+		-- for i=0,grad.size do
+		-- 	-- Avoid division by zero
+		-- 	if grad(i) == 0.0 then
+		-- 		stepSizes(i) = 0.0
+		-- 	else
+		-- 		stepSizes(i) = self.stepSize * (minGradMag/ad.math.fabs(grad(i)))
+		-- 	end
+		-- 	-- C.printf("%g\n", stepSizes(i))
+		-- end
+
 		-- Momentum update (first half)
 		for i=0,self.momenta.size do
 			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
+			-- self.momenta:set(i, self.momenta:get(i) + 0.5*stepSizes(i)*grad:get(i))
 		end
 		-- Position update
 		for i=0,pos.size do
 			pos:set(i, pos:get(i) + self.stepSize*self.momenta:get(i)*self.invMasses:get(i))
+			-- pos:set(i, pos:get(i) + stepSizes(i)*self.momenta:get(i)*self.invMasses:get(i))
 		end
 		-- Momentum update (second half)
 		var lp = self:logProbAndGrad(pos, grad)
 		for i=0,self.momenta.size do
 			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
+			-- self.momenta:set(i, self.momenta:get(i) + 0.5*stepSizes(i)*grad:get(i))
 		end
+
+		m.destruct(stepSizes)
+
 		return lp
 	end
 
@@ -375,6 +402,8 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			newlp = self:leapfrog(&pos, &grad)
 		end
 
+		-- C.printf("step size: %g                \n", self.stepSize)
+
 		-- If we're doing PMR, we need to negate momentum
 		[util.optionally(doingPMR, function() return quote
 			for i=0,self.momenta.size do self.momenta(i) = -self.momenta(i) end
@@ -382,11 +411,11 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 
 		-- If we're using the primal program to calculate final logprobs,
 		--    then we run it now
-		if usePrimalLP then
+		[util.optionally(usePrimalLP, function() return quote
 			copyNonstructRealsIntoTrace(&pos, self.dTrace)
 			[trace.traceUpdate({structureChange=false})](self.dTrace)
 			newlp = self.dTrace.logprob
-		end
+		end end)]
 
 		-- Final Hamiltonian
 		var H_new = (self:kineticEnergy() + newlp)/currTrace.temperature 
