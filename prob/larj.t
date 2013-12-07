@@ -362,6 +362,18 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, doDepthBiase
 		self.currBranchFactor = self.adapter:update(agrad)
 	end
 
+	-- Returns the weights and the sum of weights
+	terra LARJKernelT:depthBiasedSelectionWeights(vars: &Vector(&RandVar(double)))
+		var weights = [Vector(double)].stackAlloc(vars.size, 0.0)
+		var wsum = 0.0
+		for i=0,vars.size do
+			var fv = vars(i)
+			weights(i) = C.pow(self.currBranchFactor, -1.0*fv.traceDepth)
+			wsum = wsum + weights(i)
+		end
+		return weights, wsum
+	end
+
 	terra LARJKernelT:next(currTrace: &BaseTraceD)  : &BaseTraceD
 		self.jumpProposalsMade = self.jumpProposalsMade + 1
 		var oldStructTrace = [&GlobalTraceD](currTrace:deepcopy())
@@ -371,26 +383,27 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, doDepthBiase
 		var freevars = newStructTrace:freeVars(true, false)
 		var v : &RandVar(double) = nil
 
+		var fwdPropLP, rvsPropLP = 0.0, 0.0
 		[util.optionally(doDepthBiasedSelection, function() return quote
 			-- Skew variable selection based on trace depth
-			var weights = [Vector(double)].stackAlloc(freevars.size, 0.0)
-			for i=0,freevars.size do
-				var fv = freevars(i)
-				weights(i) = ad.math.pow(self.currBranchFactor, -1.0*fv.traceDepth)
-			end
-			v = freevars:get([rand.multinomial_sample(double)](weights))
+			var weights, wsum = self:depthBiasedSelectionWeights(&freevars)
+			var which = [rand.multinomial_sample(double)](weights)
+			v = freevars:get(which)
+			fwdPropLP = fwdPropLP + C.log(weights(which)/wsum)
 			m.destruct(weights)
 		end end)]
 		[util.optionally(not doDepthBiasedSelection, function() return quote
 			-- Select variable uniformly at random
 			v = freevars:get(rand.uniformRandomInt(0, freevars.size))
+			var oldNumStructVars = freevars.size
+			fwdPropLP = fwdPropLP - C.log(oldNumStructVars)
 		end end)]
 
-		var fwdPropLP, rvsPropLP = v:proposeNewValue()
+		var fplp, rplp = v:proposeNewValue()
+		fwdPropLP = fwdPropLP + fplp
+		rvsPropLP = rvsPropLP + rplp
 		[trace.traceUpdate()](newStructTrace)
-		var oldNumStructVars = freevars.size
-		var newNumStructVars = newStructTrace:numFreeVars(true, false)
-		fwdPropLP = fwdPropLP + newStructTrace.newlogprob - C.log(oldNumStructVars)
+		fwdPropLP = fwdPropLP + newStructTrace.newlogprob
 		m.destruct(freevars)
 
 		-- Do annealing, if more than zero annealing steps specified.
@@ -410,7 +423,20 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, doDepthBiase
 			m.delete(lerpTrace)
 		end end)]
 
-		rvsPropLP = oldStructTrace:lpDiff(newStructTrace) - C.log(newNumStructVars)
+		rvsPropLP = rvsPropLP + oldStructTrace:lpDiff(newStructTrace)
+		[util.optionally(doDepthBiasedSelection, function() return quote
+			var newfreevars = newStructTrace:freeVars(true, false)
+			var weights, wsum = self:depthBiasedSelectionWeights(&newfreevars)
+			var which = [rand.multinomial_sample(double)](weights)
+			rvsPropLP = rvsPropLP + C.log(weights(which)/wsum)
+			m.destruct(weights)
+			m.destruct(newfreevars)
+		end end)]
+		[util.optionally(not doDepthBiasedSelection, function() return quote
+			var newNumStructVars = newStructTrace:numFreeVars(true, false)
+			rvsPropLP = rvsPropLP - C.log(newNumStructVars)
+		end end)]
+
 		var acceptanceProb = (newStructTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP + annealingLpRatio
 
 		-- Adapt branchFactor, if requested
