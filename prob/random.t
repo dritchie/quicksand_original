@@ -194,7 +194,7 @@ specialize("binomial_sample", 1, function(V, P)
 	return terra (p: P, n: int) : int
 		var k = 0
 		var N = 10
-		var a:int, b:int
+		var a:double, b:double
 		while n > N do
 			a = 1 + n/2
 			b = 1 + n-a
@@ -249,15 +249,15 @@ end)
 
 specialize("poisson_sample", 1, function(V, P)
 	return terra(mu: P) : int
-		var k:int = 0
+		var k = 0.0
 		while mu > 10 do
 			var m = (7.0/8)*mu
 			var x = [fns.gamma_sample(P)](m, 1.0)
 			if x > mu then
-				return k + [fns.binomial_sample(P)](mu/x, ad.val(m-1))
+				return int(k + [fns.binomial_sample(P)](mu/x, ad.val(m-1)))
 			else
 				mu = mu - x
-				k = k + 1
+				k = k + m
 			end
 		end
 		var emu = ad.math.exp(-mu)
@@ -266,7 +266,7 @@ specialize("poisson_sample", 1, function(V, P)
 			p = p * random()
 			k = k + 1
 		end
-		return k-1
+		return int(k-1)
 	end
 end)
 
