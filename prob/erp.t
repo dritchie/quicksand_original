@@ -25,8 +25,8 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 	local RVar = RandVar(ProbType)
 	inheritance.dynamicExtend(RVar, RandVarWithValT)
 
-	terra RandVarWithValT:__construct(val: ValType, isstruct: bool, iscond: bool, depth: uint)
-		RVar.__construct(self, isstruct, iscond, depth)
+	terra RandVarWithValT:__construct(val: ValType, isstruct: bool, iscond: bool, depth: uint, mass: double)
+		RVar.__construct(self, isstruct, iscond, depth, mass)
 		self.value = m.copy(val)
 	end
 
@@ -187,17 +187,17 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	-- Ctor 1: Take in a value argument 
 	local paramsyms = {}
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-	terra RandVarFromFunctionsT:__construct(val: ValType, isstruct: bool, iscond: bool, depth: uint, [paramsyms])
-		ParentClass.__construct(self, val, isstruct, iscond, depth)
+	terra RandVarFromFunctionsT:__construct(val: ValType, isstruct: bool, iscond: bool, depth: uint, mass: double, [paramsyms])
+		ParentClass.__construct(self, val, isstruct, iscond, depth, mass)
 		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]
 		self:updateLogprob()
 	end
 	-- Ctor 2: No value argument, sample one instead
 	paramsyms = {}
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-	terra RandVarFromFunctionsT:__construct(isstruct: bool, iscond: bool, depth: uint, [paramsyms])
+	terra RandVarFromFunctionsT:__construct(isstruct: bool, iscond: bool, depth: uint, mass: double, [paramsyms])
 		var val = sample([paramsyms])
-		ParentClass.__construct(self, val, isstruct, iscond, depth)
+		ParentClass.__construct(self, val, isstruct, iscond, depth, mass)
 		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]
 		self:updateLogprob()
 	end
@@ -269,18 +269,28 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	end
 	paramsyms = {}
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-	terra RandVarFromFunctionsT:checkForUpdates([paramsyms])
+	terra RandVarFromFunctionsT:checkForUpdates(mass: double, [paramsyms])
 		var hasChanges = false
 		[checkParams(self, hasChanges)]
+		if not self.isStructural and (mass ~= self.mass) then
+			self.mass = mass
+			self.invMass = 1.0/mass
+			hasChanges = true
+		end
 		if hasChanges then
 			self:updateLogprob()
 		end
 	end
 	paramsyms = {}
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-	terra RandVarFromFunctionsT:checkForUpdates(val: ValType, [paramsyms])
+	terra RandVarFromFunctionsT:checkForUpdates(val: ValType, mass: double, [paramsyms])
 		var hasChanges = false
 		[checkParams(self, hasChanges)]
+		if not self.isStructural and (mass ~= self.mass) then
+			self.mass = mass
+			self.invMass = 1.0/mass
+			hasChanges = true
+		end
 		if not (self.value == val) then
 			m.destruct(self.value)
 			self.value = m.copy(val)
@@ -428,11 +438,11 @@ local function makeERP(sample, logprobfn, propose)
 			-- Check whether this is a conditioned or unconditioned ERP
 			local paramtypes = {}
 			local isCond = false
-			if #args == numParams + 2 then
+			if #args == numParams + 3 then
 				isCond = true
+				for i=4,#args do table.insert(paramtypes, args[i]:gettype()) end
+			elseif #args == numParams + 2 then
 				for i=3,#args do table.insert(paramtypes, args[i]:gettype()) end
-			elseif #args == numParams + 1 then
-				for i=2,#args do table.insert(paramtypes, args[i]:gettype()) end
 			else
 				error("Unexpected number of arguments to ERP function call.")
 			end
@@ -442,12 +452,12 @@ local function makeERP(sample, logprobfn, propose)
 			for _,t in ipairs(paramtypes) do table.insert(params, symbol(t)) end
 			local erpfn = nil
 			if isCond then
-				erpfn = terra(isstruct: bool, condVal: rettype, [params])
-					return [trace.lookupVariableValue(RandVarType, isstruct, true, condVal, params, specParams)]
+				erpfn = terra(isstruct: bool, condVal: rettype, mass: double, [params])
+					return [trace.lookupVariableValue(RandVarType, isstruct, true, condVal, mass, params, specParams)]
 				end
 			else
-				erpfn = terra(isstruct: bool, [params])
-					return [trace.lookupVariableValue(RandVarType, isstruct, false, nil, params, specParams)]
+				erpfn = terra(isstruct: bool, mass: double, [params])
+					return [trace.lookupVariableValue(RandVarType, isstruct, false, nil, mass, params, specParams)]
 				end
 			end
 			-- The ERP must push an ID to the callsite stack.
@@ -482,6 +492,18 @@ local function makeERP(sample, logprobfn, propose)
 		return nil
 	end
 
+	local function getmass(opstruct)
+		if opstruct then
+			local t = opstruct:gettype()
+			for _,e in ipairs(t.entries) do
+				if e.field == "mass"
+					then return `opstruct.mass
+				end
+			end
+		end
+		return `1.0
+	end
+
 	-- Finally, wrap everything in a function that extracts options from the
 	-- options struct.
 	return spec.specializable(function(...)
@@ -492,11 +514,12 @@ local function makeERP(sample, logprobfn, propose)
 			local opstruct = (select(numparams+1, ...))
 			local isstruct = getisstruct(opstruct)
 			local condval = getcondval(opstruct)
+			local mass = getmass(opstruct)
 			local erpfn = genErpFunction(paramTable)
 			if condval then
-				return `erpfn(isstruct, condval, [params])
+				return `erpfn(isstruct, condval, mass, [params])
 			else
-				return `erpfn(isstruct, [params])
+				return `erpfn(isstruct, mass, [params])
 			end
 		end)
 	end)

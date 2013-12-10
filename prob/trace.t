@@ -542,19 +542,19 @@ local function newTrace(computation, ProbType)
 	return `TraceType.heapAlloc()
 end
 
-local function lookupVariableValueStructural(RandVarType, isstruct, iscond, condVal, params, specParams)
+local function lookupVariableValueStructural(RandVarType, isstruct, iscond, condVal, mass, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
 	local q =
 	quote
 		var rv = [&RandVarType](globTrace:lookupVariableStructural(isstruct))
 		if rv ~= nil then
 			-- Check for changes that necessitate a logprob update
-			[iscond and (`rv:checkForUpdates(condVal, [params])) or (`rv:checkForUpdates([params]))]
+			[iscond and (`rv:checkForUpdates(condVal, mass, [params])) or (`rv:checkForUpdates(mass, [params]))]
 		else
 			var depth = callsiteStack.size
 			-- Make new variable, add to master list of vars, add to newlogprob
-			rv = [iscond and (`RandVarType.heapAlloc(condVal, isstruct, iscond, depth, [params])) or
-							 (`RandVarType.heapAlloc(isstruct, iscond, depth, [params]))]
+			rv = [iscond and (`RandVarType.heapAlloc(condVal, isstruct, iscond, depth, mass, [params])) or
+							 (`RandVarType.heapAlloc(isstruct, iscond, depth, mass, [params]))]
 			globTrace.newlogprob = globTrace.newlogprob + rv.logprob
 			globTrace.lastVarList:push(rv)
 		end
@@ -569,12 +569,12 @@ local function lookupVariableValueStructural(RandVarType, isstruct, iscond, cond
 	return q
 end
 
-local function lookupVariableValueNonStructural(RandVarType, isstruct, iscond, condVal, params, specParams)
+local function lookupVariableValueNonStructural(RandVarType, isstruct, iscond, condVal, mass, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
 	return quote
 		var rv = [&RandVarType](globTrace:lookupVariableNonStructural())
 		-- Check for changes that necessitate a logprob update
-		[iscond and (`rv:checkForUpdates(condVal, [params])) or (`rv:checkForUpdates([params]))]
+		[iscond and (`rv:checkForUpdates(condVal, mass, [params])) or (`rv:checkForUpdates(mass, [params]))]
 		-- Add to logprob, set active
 		rv.isActive = true
 		globTrace.logprob = globTrace.logprob + rv.logprob
@@ -584,7 +584,7 @@ local function lookupVariableValueNonStructural(RandVarType, isstruct, iscond, c
 	end
 end
 
-local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, params, specParams)
+local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, mass, params, specParams)
 	local doingInference = spec.paramFromTable("doingInference", specParams)
 	-- If we're not running in an inference engine, then just return the value directly.
 	if not doingInference then
@@ -594,9 +594,9 @@ local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, param
 	--    structure is fixed or variable.
 	local structureChange = spec.paramFromTable("structureChange", specParams)
 	if structureChange then
-		return lookupVariableValueStructural(RandVarType, isstruct, iscond, condVal, params, specParams)
+		return lookupVariableValueStructural(RandVarType, isstruct, iscond, condVal, mass, params, specParams)
 	else
-		return lookupVariableValueNonStructural(RandVarType, isstruct, iscond, condVal, params, specParams)
+		return lookupVariableValueNonStructural(RandVarType, isstruct, iscond, condVal, mass, params, specParams)
 	end
 end
 

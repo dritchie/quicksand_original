@@ -39,6 +39,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		gradient: Vector(double),
 		momenta: Vector(double),
 		invMasses: Vector(double),
+		origInvMasses: Vector(double),
 		adTrace: &BaseTraceAD,
 		dTrace: &BaseTraceD,
 		adNonstructuralVars: Vector(&RandVarAD),
@@ -63,6 +64,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		self.gradient = [Vector(double)].stackAlloc()
 		self.momenta = [Vector(double)].stackAlloc()
 		self.invMasses = [Vector(double)].stackAlloc()
+		self.origInvMasses = [Vector(double)].stackAlloc() 
 		self.adTrace = nil
 		self.dTrace = nil
 		m.init(self.adNonstructuralVars)
@@ -78,6 +80,8 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		m.destruct(self.positions)
 		m.destruct(self.momenta)
 		m.destruct(self.gradient)
+		m.destruct(self.invMasses)
+		m.destruct(self.origInvMasses)
 		if self.adTrace ~= nil then m.delete(self.adTrace) end
 		if self.dTrace ~= nil then m.delete(self.dTrace) end
 		m.destruct(self.adNonstructuralVars)
@@ -240,19 +244,27 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			var newScale = alpha
 			for i=0,self.LARJOldComponents.size do
 				var j = self.LARJOldComponents:get(i)
-				self.invMasses:set(j, oldScale)
+				self.invMasses(j) = oldScale*self.origInvMasses(j)
 			end
 			for i=0,self.LARJNewComponents.size do
 				var j = self.LARJNewComponents:get(i)
-				self.invMasses:set(j, newScale)
+				self.invMasses(j) = newScale*self.origInvMasses(j)
 			end
 		end
 	end
 	terra HMCKernelT:initInverseMasses(currTrace: &BaseTraceD)
-		self.invMasses:resize(self.positions.size)
-		for i=0,self.invMasses.size do
-			self.invMasses:set(i, 1.0)
+		self.origInvMasses:resize(self.positions.size)
+		var index = 0
+		for i=0,self.adNonstructuralVars.size do
+			var numComps = self.realCompsPerVariable(i)
+			for j=0,numComps do
+				self.origInvMasses(index + j) = self.adNonstructuralVars(i).invMass
+			end
+			index = index + numComps
 		end
+		m.destruct(self.invMasses)
+		self.invMasses = m.copy(self.origInvMasses)
+
 		if [inheritance.isInstanceOf(larj.InterpolationTrace(double))](currTrace) then
 			self.doingLARJ = true
 			self.LARJOldComponents:clear()
