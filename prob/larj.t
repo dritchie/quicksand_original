@@ -37,7 +37,7 @@ local InterpolationRandVar = templatize(function(ProbType)
 	inheritance.dynamicExtend(RVar, InterpolationRandVarT)
 
 	terra InterpolationRandVarT:__construct(rv1: &RVar, rv2: &RVar)
-		RVar.__construct(self, rv1.isStructural, rv1.isDirectlyConditioned, rv1.traceDepth)
+		RVar.__construct(self, rv1.isStructural, rv1.isDirectlyConditioned, rv1.traceDepth, rv1.mass)
 		self.logprob = rv1.logprob
 		self.rv1 = rv1
 		self.rv2 = rv2
@@ -360,6 +360,9 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, doDepthBiase
 		var agrad = targetAcceptRate - e
 		-- Dual averaging
 		self.currBranchFactor = self.adapter:update(agrad)
+		-- Clamp, in case we're getting lots of negative feedback that's driving
+		--    the branch factor down
+		self.currBranchFactor = C.fmax(self.currBranchFactor, 1.0)
 	end
 
 	-- Returns the weights and the sum of weights
@@ -389,6 +392,13 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, doDepthBiase
 			var weights, wsum = self:depthBiasedSelectionWeights(&freevars)
 			var which = [rand.multinomial_sample(double)](weights)
 			v = freevars:get(which)
+			-- C.printf("--------------                 \n")
+			-- C.printf("currBranchFactor: %g\n", self.currBranchFactor)
+			-- C.printf("which: %d\n", which)
+			-- C.printf("weights(which): %g\n", weights(which))
+			-- C.printf("wsum: %g\n", wsum)
+			-- C.printf("weights(which)/wsum: %g\n", weights(which)/wsum)
+			-- C.printf("C.log(weights(which)/wsum): %g\n", C.log(weights(which)/wsum))
 			fwdPropLP = fwdPropLP + C.log(weights(which)/wsum)
 			m.destruct(weights)
 		end end)]
@@ -437,7 +447,15 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, doDepthBiase
 			rvsPropLP = rvsPropLP - C.log(newNumStructVars)
 		end end)]
 
-		var acceptanceProb = (newStructTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP + annealingLpRatio
+		-- var acceptanceProb = (newStructTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP + annealingLpRatio
+		var acceptanceProb = (newStructTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP
+
+		-- C.printf("--------------                 \n")
+		-- C.printf("newStructTrace.logprob: %g\n", newStructTrace.logprob)
+		-- C.printf("currTrace.logprob: %g\n", currTrace.logprob)
+		-- C.printf("rvsPropLP: %g\n", rvsPropLP)
+		-- C.printf("fwdPropLP: %g\n", fwdPropLP)
+		-- C.printf("acceptanceProb: %g\n", acceptanceProb)
 
 		-- Adapt branchFactor, if requested
 		[util.optionally(doDepthBiasedSelection and branchFactorAdapt, function()
