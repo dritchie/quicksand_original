@@ -425,7 +425,13 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			-- return value
 			copyNonstructRealsIntoTrace(&self.positions, currTrace)
 			[trace.traceUpdate({structureChange=false, factorEval=false})](currTrace)
-			[BaseTraceD.setLogprobFrom(ad.num)](currTrace, self.adTrace)
+			-- Set logprob, since we didn't eval factors on the flush run.
+			[util.optionally(usePrimalLP, function() return quote
+				[BaseTraceD.setLogprobFrom(double)](currTrace, self.dTrace)
+			end end)]
+			[util.optionally(not usePrimalLP, function() return quote
+				[BaseTraceD.setLogprobFrom(ad.num)](currTrace, self.adTrace)
+			end end)]
 		end
 
 		-- If we're doing PMR, we negate momentum again (so we get momentum
