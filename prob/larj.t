@@ -447,8 +447,7 @@ local LARJKernel = templatize(function(intervals, stepsPerInterval, doDepthBiase
 			rvsPropLP = rvsPropLP - C.log(newNumStructVars)
 		end end)]
 
-		-- var acceptanceProb = (newStructTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP + annealingLpRatio
-		var acceptanceProb = (newStructTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP
+		var acceptanceProb = (newStructTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP + annealingLpRatio
 
 		-- C.printf("--------------                 \n")
 		-- C.printf("newStructTrace.logprob: %g\n", newStructTrace.logprob)
