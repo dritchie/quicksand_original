@@ -389,8 +389,6 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			newlp = self:leapfrog(&pos, &grad)
 		end
 
-		-- C.printf("step size: %g                \n", self.stepSize)
-
 		-- If we're doing PMR, we need to negate momentum
 		[util.optionally(doingPMR, function() return quote
 			for i=0,self.momenta.size do self.momenta(i) = -self.momenta(i) end
