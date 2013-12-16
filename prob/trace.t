@@ -542,7 +542,7 @@ local function newTrace(computation, ProbType)
 	return `TraceType.heapAlloc()
 end
 
-local function lookupVariableValueStructural(RandVarType, isstruct, iscond, condVal, mass, params, specParams)
+local function lookupVariableValueStructural(RandVarType, isstruct, hasPrior, iscond, condVal, mass, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
 	local q =
 	quote
@@ -560,7 +560,9 @@ local function lookupVariableValueStructural(RandVarType, isstruct, iscond, cond
 		end
 		-- Add to logprob, set active, add to flat list
 		rv.isActive = true
-		globTrace.logprob = globTrace.logprob + rv.logprob
+		if hasPrior then
+			globTrace.logprob = globTrace.logprob + rv.logprob
+		end
 		globTrace.varlist:push(rv)
 		var retval = m.copy(rv.value)
 	in
@@ -569,7 +571,7 @@ local function lookupVariableValueStructural(RandVarType, isstruct, iscond, cond
 	return q
 end
 
-local function lookupVariableValueNonStructural(RandVarType, isstruct, iscond, condVal, mass, params, specParams)
+local function lookupVariableValueNonStructural(RandVarType, isstruct, hasPrior, iscond, condVal, mass, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
 	return quote
 		var rv = [&RandVarType](globTrace:lookupVariableNonStructural())
@@ -577,14 +579,16 @@ local function lookupVariableValueNonStructural(RandVarType, isstruct, iscond, c
 		[iscond and (`rv:checkForUpdates(condVal, mass, [params])) or (`rv:checkForUpdates(mass, [params]))]
 		-- Add to logprob, set active
 		rv.isActive = true
-		globTrace.logprob = globTrace.logprob + rv.logprob
+		if hasPrior then
+			globTrace.logprob = globTrace.logprob + rv.logprob
+		end
 		var retval = m.copy(rv.value)
 	in
 		retval
 	end
 end
 
-local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, mass, params, specParams)
+local function lookupVariableValue(RandVarType, isstruct, hasPrior, iscond, condVal, mass, params, specParams)
 	local doingInference = spec.paramFromTable("doingInference", specParams)
 	-- If we're not running in an inference engine, then just return the value directly.
 	if not doingInference then
@@ -594,9 +598,9 @@ local function lookupVariableValue(RandVarType, isstruct, iscond, condVal, mass,
 	--    structure is fixed or variable.
 	local structureChange = spec.paramFromTable("structureChange", specParams)
 	if structureChange then
-		return lookupVariableValueStructural(RandVarType, isstruct, iscond, condVal, mass, params, specParams)
+		return lookupVariableValueStructural(RandVarType, isstruct, hasPrior, iscond, condVal, mass, params, specParams)
 	else
-		return lookupVariableValueNonStructural(RandVarType, isstruct, iscond, condVal, mass, params, specParams)
+		return lookupVariableValueNonStructural(RandVarType, isstruct, hasPrior, iscond, condVal, mass, params, specParams)
 	end
 end
 

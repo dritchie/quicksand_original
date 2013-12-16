@@ -438,12 +438,13 @@ local function makeERP(sample, logprobfn, propose)
 			-- Check whether this is a conditioned or unconditioned ERP
 			local paramtypes = {}
 			local isCond = false
-			if #args == numParams + 3 then
+			if #args == numParams + 4 then
 				isCond = true
+				for i=5,#args do table.insert(paramtypes, args[i]:gettype()) end
+			elseif #args == numParams + 3 then
 				for i=4,#args do table.insert(paramtypes, args[i]:gettype()) end
-			elseif #args == numParams + 2 then
-				for i=3,#args do table.insert(paramtypes, args[i]:gettype()) end
 			else
+				print(#args, numParams)
 				error("Unexpected number of arguments to ERP function call.")
 			end
 			local rettype = specSample:gettype().returns[1]	-- All overloads must have same return type, so this is fine.
@@ -452,12 +453,12 @@ local function makeERP(sample, logprobfn, propose)
 			for _,t in ipairs(paramtypes) do table.insert(params, symbol(t)) end
 			local erpfn = nil
 			if isCond then
-				erpfn = terra(isstruct: bool, condVal: rettype, mass: double, [params])
-					return [trace.lookupVariableValue(RandVarType, isstruct, true, condVal, mass, params, specParams)]
+				erpfn = terra(isstruct: bool, hasPrior: bool, condVal: rettype, mass: double, [params])
+					return [trace.lookupVariableValue(RandVarType, isstruct, hasPrior, true, condVal, mass, params, specParams)]
 				end
 			else
-				erpfn = terra(isstruct: bool, mass: double, [params])
-					return [trace.lookupVariableValue(RandVarType, isstruct, false, nil, mass, params, specParams)]
+				erpfn = terra(isstruct: bool, hasPrior: bool, mass: double, [params])
+					return [trace.lookupVariableValue(RandVarType, isstruct, hasPrior, false, nil, mass, params, specParams)]
 				end
 			end
 			-- The ERP must push an ID to the callsite stack.
@@ -504,6 +505,18 @@ local function makeERP(sample, logprobfn, propose)
 		return `1.0
 	end
 
+	local function getHasPrior(opstruct)
+		if opstruct then
+			local t = opstruct:gettype()
+			for _,e in ipairs(t.entries) do
+				if e.field == "hasPrior"
+					then return `opstruct.hasPrior
+				end
+			end
+		end
+		return true
+	end
+
 	-- Finally, wrap everything in a function that extracts options from the
 	-- options struct.
 	return spec.specializable(function(...)
@@ -515,11 +528,12 @@ local function makeERP(sample, logprobfn, propose)
 			local isstruct = getisstruct(opstruct)
 			local condval = getcondval(opstruct)
 			local mass = getmass(opstruct)
+			local hasPrior = getHasPrior(opstruct)
 			local erpfn = genErpFunction(paramTable)
 			if condval then
-				return `erpfn(isstruct, condval, mass, [params])
+				return `erpfn(isstruct, hasPrior, condval, mass, [params])
 			else
-				return `erpfn(isstruct, mass, [params])
+				return `erpfn(isstruct, hasPrior, mass, [params])
 			end
 		end)
 	end)
