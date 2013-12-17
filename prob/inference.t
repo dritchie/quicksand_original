@@ -405,7 +405,7 @@ local function mcmc(computation, kernelgen, params)
 		var samps = [Vector(Sample(RetValType))].stackAlloc()
 		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
 		var t0 = 0.0
-		for i=0,iters do
+		for i=0,iters+1 do
 			if verbose then
 				C.printf(" iteration: %d\r", i+1)
 				C.flush()
