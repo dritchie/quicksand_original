@@ -8,7 +8,11 @@ local erph = terralib.require("prob.erph")
 -- Base RNG
 local C = terralib.includecstring([[
 	#include <stdlib.h>
-	#include <sys/time.h>
+#ifdef __linux__
+	#include <time.h>
+#else
+    #include <sys/time.h>
+#endif
 	double random_() { return rand() / (RAND_MAX+1.0); }
 	void initrand_() { srand(time(NULL)); }
 ]])
