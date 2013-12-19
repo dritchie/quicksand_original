@@ -405,14 +405,14 @@ local function mcmc(computation, kernelgen, params)
 		var samps = [Vector(Sample(RetValType))].stackAlloc()
 		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
 		var t0 = 0.0
-		for i=0,iters+1 do
+		for i=0,iters do
 			if verbose then
 				C.printf(" iteration: %d\r", i+1)
 				C.flush()
 				if i == 1 then t0 = C.currentTimeInSeconds() end
 			end
 			currTrace = kernel:next(currTrace)
-			if i % lag == 0 and i > burnin then
+			if i % lag == 0 and i >= burnin then
 				var derivedTrace = [&RandExecTrace(double, computation)](currTrace)
 				samps:push([Sample(RetValType)].stackAlloc(derivedTrace.returnValue, derivedTrace.logprob))
 			end
