@@ -2,19 +2,14 @@ local rand = terralib.require("prob.random")
 local inf = terralib.require("prob.inference")
 local m = terralib.require("mem")
 local Vector = terralib.require("vector")
+local util = terralib.require("util")
 terralib.require("prob")
 
 local C = terralib.includecstring [[
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
-#include <sys/time.h>
 inline void flush() { fflush(stdout); }
-inline double currentTimeInSeconds() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return tv.tv_sec + tv.tv_usec / 1000000.0;
-}
 ]]
 
 local numsamps = 150
@@ -140,7 +135,7 @@ local terra doTests()
 
 	C.printf("starting tests...\n")
 
-	var t1 = C.currentTimeInSeconds()
+	var t1 = util.currentTimeInSeconds()
 
 	-- ERP tests
 
@@ -693,7 +688,7 @@ local terra doTests()
 	0.1)]
 
 
-	var t2 = C.currentTimeInSeconds()
+	var t2 = util.currentTimeInSeconds()
 
 	C.printf("tests done!\n")
 	C.printf("time: %g\n", t2 - t1)
