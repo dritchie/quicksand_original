@@ -52,11 +52,13 @@ local nextid = 0
 local pfn = spec.specializable(function(...)
 	local structureChange = spec.paramFromList("structureChange", ...)
 	local doingInference = spec.paramFromList("doingInference", ...)
-	return function(fn)
+	return function(fn, opts)
+		local ismethod = opts and opts.ismethod
 		local data = { definition = fn }
 		local ret = macro(function(...)
 			local args = {}
 			for i=1,select("#",...) do table.insert(args, (select(i,...))) end
+			if ismethod then args[1] = `&[args[1]] end
 			-- If we're compiling a specialization with no structure change, or if we're running
 			--    the code outside of an inference engine, then don't do any address tracking
 			if not doingInference or not structureChange then
