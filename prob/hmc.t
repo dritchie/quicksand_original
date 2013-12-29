@@ -23,9 +23,10 @@ local C = terralib.includecstring [[
 -- Kernel for doing Hamiltonian Monte Carlo proposals
 -- Only makes proposals to non-structural variables
 local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
-									  stepSizeAdapt, targetAcceptRate, adaptationRate,
+									  stepSizeAdapt, adaptationRate,
 									  pmrAlpha)
 	local doingPMR = pmrAlpha > 0.0
+	local targetAcceptRate = (numSteps == 1) and 0.57 or 0.65
 	local struct HMCKernelT
 	{
 		stepSize: double,
@@ -464,7 +465,7 @@ local HMC = util.fnWithDefaultArgs(function(...)
 	return function() return `HMCType.heapAlloc() end
 end,
 {{"stepSize", -1.0}, {"numSteps", 1}, {"usePrimalLP", false},
- {"stepSizeAdapt", true}, {"targetAcceptRate", 0.57}, {"adaptationRate", 0.05},
+ {"stepSizeAdapt", true}, {"adaptationRate", 0.05},
  {"pmrAlpha", 0.0}})
 
 
