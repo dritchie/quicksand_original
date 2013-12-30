@@ -117,7 +117,10 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 
 	-- TODO: The updates in this function are a good candidate for vectorized multiply/add.
 	terra HMCKernelT:leapfrog(pos: &Vector(double), grad: &Vector(double))
-
+		-- C.printf("Initial pos:\n")
+		-- for i=0,pos.size do C.printf("%g\n", pos(i)) end
+		-- C.printf("Initial grad:\n")
+		-- for i=0,grad.size do C.printf("%g\n", grad(i)) end
 		-- Momentum update (first half)
 		for i=0,self.momenta.size do
 			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
@@ -128,6 +131,10 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end
 		-- Momentum update (second half)
 		var lp = self:logProbAndGrad(pos, grad)
+		-- C.printf("Midpoint pos:\n")
+		-- for i=0,pos.size do C.printf("%g\n", pos(i)) end
+		-- C.printf("Midpoint grad:\n")
+		-- for i=0,grad.size do C.printf("%g\n", grad(i)) end
 		for i=0,self.momenta.size do
 			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
 		end
@@ -383,12 +390,16 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		var H = (self:kineticEnergy() + currTrace.logprob)/currTrace.temperature 
 
 		-- Do leapfrog steps
+		-- C.printf("--- TRAJECTORY START ---\n")
 		var pos = m.copy(self.positions)
 		var grad = m.copy(self.gradient)
 		var newlp : double
 		for i=0,numSteps do
 			newlp = self:leapfrog(&pos, &grad)
 		end
+		-- C.printf("--- TRAJECTORY END ---\n")
+
+		-- C.printf("%g                \n", newlp)
 
 		-- If we're doing PMR, we need to negate momentum
 		[util.optionally(doingPMR, function() return quote

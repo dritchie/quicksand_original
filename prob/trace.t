@@ -341,6 +341,7 @@ GlobalTrace = templatize(function(ProbType)
 
 	terra GlobalTraceT:factor(num: ProbType)
 		self.logprob = self.logprob + num
+		-- C.printf("add factor: %g, lp = %g\n", ad.val(num), ad.val(self.logprob))
 	end
 	util.inline(GlobalTraceT.methods.factor)
 
@@ -478,7 +479,9 @@ RandExecTrace = templatize(function(ProbType, computation)
 
 			-- Run computation
 			if self.hasReturnValue then m.destruct(self.returnValue) end
+			-- C.printf("--- START ---\n")
 			self.returnValue = speccomp()
+			-- C.printf("---  END  ---\n")
 			self.hasReturnValue = true
 
 			-- Clean up
@@ -583,6 +586,7 @@ local function lookupVariableValueNonStructural(RandVarType, isstruct, hasPrior,
 		rv.isActive = true
 		if hasPrior then
 			globTrace.logprob = globTrace.logprob + rv.logprob
+			-- C.printf("add prior: %g, lp = %g\n", ad.val(rv.logprob), ad.val(globTrace.logprob))
 		end
 		var retval = m.copy(rv.value)
 	in
