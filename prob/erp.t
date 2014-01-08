@@ -468,53 +468,19 @@ local function makeERP(sample, logprobfn, propose)
 		end)
 	end)
 
-	local function getisstruct(opstruct)
+	-- Look for 'field' in 'opstruct'
+	-- If it is there, return the quoted value
+	-- Otherwise, return a defaultValue
+	local function getField(opstruct, field, defaultVal)
 		if opstruct then
 			local t = opstruct:gettype()
 			for _,e in ipairs(t.entries) do
-				if e.field == "structural"
-					then return `opstruct.structural
+				if e.field == field
+					then return `opstruct.[field]
 				end
 			end
 		end
-		-- Defaulting to 'structural=true' is more sensible.
-		return true
-	end
-
-	local function getcondval(opstruct)
-		if opstruct then
-			local t = opstruct:gettype()
-			for _,e in ipairs(t.entries) do
-				if e.field == "constrainTo"
-					then return `opstruct.constrainTo
-				end
-			end
-		end
-		return nil
-	end
-
-	local function getmass(opstruct)
-		if opstruct then
-			local t = opstruct:gettype()
-			for _,e in ipairs(t.entries) do
-				if e.field == "mass"
-					then return `opstruct.mass
-				end
-			end
-		end
-		return `1.0
-	end
-
-	local function getHasPrior(opstruct)
-		if opstruct then
-			local t = opstruct:gettype()
-			for _,e in ipairs(t.entries) do
-				if e.field == "hasPrior"
-					then return `opstruct.hasPrior
-				end
-			end
-		end
-		return true
+		return defaultVal
 	end
 
 	-- Finally, wrap everything in a function that extracts options from the
@@ -525,10 +491,10 @@ local function makeERP(sample, logprobfn, propose)
 			local params = {}
 			for i=1,numparams do table.insert(params, (select(i,...))) end
 			local opstruct = (select(numparams+1, ...))
-			local isstruct = getisstruct(opstruct)
-			local condval = getcondval(opstruct)
-			local mass = getmass(opstruct)
-			local hasPrior = getHasPrior(opstruct)
+			local isstruct = getField(opstruct, "structural", true)
+			local condval = getField(opstruct, "constrainTo", nil)
+			local mass = getField(opstruct, "mass", `1.0)
+			local hasPrior = getField(opstruct, "hasPrior", true)
 			local erpfn = genErpFunction(paramTable)
 			if condval then
 				return `erpfn(isstruct, hasPrior, condval, mass, [params])
