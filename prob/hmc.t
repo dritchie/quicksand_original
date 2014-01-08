@@ -20,6 +20,7 @@ local C = terralib.includecstring [[
 ]]
 
 
+
 -- Kernel for doing Hamiltonian Monte Carlo proposals
 -- Only makes proposals to non-structural variables
 local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
@@ -399,7 +400,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end
 		-- C.printf("--- TRAJECTORY END ---\n")
 
-		-- C.printf("%g                \n", newlp)
+		-- C.printf("%g, %g            \n", grad(grad.size-2), grad(grad.size-1))
+		-- C.printf("%g                    \n", self.stepSize)
+		-- C.printf("%g              \n", newlp)
 
 		-- If we're doing PMR, we need to negate momentum
 		[util.optionally(doingPMR, function() return quote
@@ -425,7 +428,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end
 
 		-- Accept/reject test
-		if ad.math.log(rand.random()) < dH then
+		var accept = ad.math.log(rand.random()) < dH
+		-- var accept = true
+		if accept then
 			self.proposalsAccepted = self.proposalsAccepted + 1
 			m.destruct(self.positions)
 			m.destruct(self.gradient)
@@ -442,6 +447,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			[util.optionally(not usePrimalLP, function() return quote
 				[BaseTraceD.setLogprobFrom(ad.num)](currTrace, self.adTrace)
 			end end)]
+			-- C.printf("ACCEPT                   \n")
+		else
+			-- C.printf("REJECT                   \n")
 		end
 
 		-- If we're doing PMR, we negate momentum again (so we get momentum
