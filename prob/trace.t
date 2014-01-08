@@ -547,37 +547,13 @@ local function newTrace(computation, ProbType)
 	return `TraceType.heapAlloc()
 end
 
--- Look for 'field' in 'opstruct'
--- If it is there, return the quoted value
--- Otherwise, return a defaultValue
-local function getErpOption(opstruct, ostyp, field, defaultVal)
-	for _,e in ipairs(ostyp.entries) do
-		if e.field == field
-			then return `opstruct.[field]
-		end
-	end
-	return defaultVal
-end
-local function getCondVal(opstruct, ostyp)
-	return getErpOption(opstruct, ostyp, "constrainTo", nil)
-end
-local function getIsStruct(opstruct, ostyp)
-	return getErpOption(opstruct, ostyp, "structural", true)
-end
-local function getHasPrior(opstruct, ostyp)
-	return getErpOption(opstruct, ostyp, "hasPrior", true)
-end
-local function getMass(opstruct, ostyp)
-	return getErpOption(opstruct, ostyp, "mass", `1.0)
-end
-
 local function lookupVariableValueStructural(RandVarType, opstruct, OpstructType, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
-	local condVal = getCondVal(opstruct, OpstructType)
+	local condVal = erp.opts.getCondVal(opstruct, OpstructType)
 	local iscond = condVal ~= nil
-	local isstruct = getIsStruct(opstruct, OpstructType)
-	local mass = getMass(opstruct, OpstructType)
-	local hasPrior = getHasPrior(opstruct, OpstructType)
+	local isstruct = erp.opts.getIsStruct(opstruct, OpstructType)
+	local mass = erp.opts.getMass(opstruct, OpstructType)
+	local hasPrior = erp.opts.getHasPrior(opstruct, OpstructType)
 	return quote
 		var rv = [&RandVarType](globTrace:lookupVariableStructural(isstruct))
 		if rv ~= nil then
@@ -605,9 +581,9 @@ end
 
 local function lookupVariableValueNonStructural(RandVarType, opstruct, OpstructType, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
-	local condVal = getCondVal(opstruct, OpstructType)
-	local mass = getMass(opstruct, OpstructType)
-	local hasPrior = getHasPrior(opstruct, OpstructType)
+	local condVal = erp.opts.getCondVal(opstruct, OpstructType)
+	local mass = erp.opts.getMass(opstruct, OpstructType)
+	local hasPrior = erp.opts.getHasPrior(opstruct, OpstructType)
 	return quote
 		var rv = [&RandVarType](globTrace:lookupVariableNonStructural())
 		-- Check for changes that necessitate a logprob update
@@ -628,7 +604,7 @@ local function lookupVariableValue(RandVarType, opstruct, OpstructType, params, 
 	local doingInference = spec.paramFromTable("doingInference", specParams)
 	-- If we're not running in an inference engine, then just return the value directly.
 	if not doingInference then
-		return (getCondVal(opstruct, OpstructType) or (`RandVarType.sample([params])))
+		return (erp.opts.getCondVal(opstruct, OpstructType) or (`RandVarType.sample([params])))
 	end
 	-- Otherwise, the algorithm for variable lookup depends on whether the program control
 	--    structure is fixed or variable.

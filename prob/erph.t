@@ -145,6 +145,36 @@ local function resetERPID() erpid = 1 end
 spec.registerPreGlobalSpecializationEvent(resetERPID)
 
 
+
+-- Functions for retrieving options by name from the options struct passed to an ERP call.
+local opts = {}
+
+-- Look for 'field' in 'opstruct'
+-- If it is there, return the quoted value
+-- Otherwise, return a defaultValue
+function opts.getErpOption(opstruct, ostyp, field, defaultVal)
+	for _,e in ipairs(ostyp.entries) do
+		if e.field == field
+			then return `opstruct.[field]
+		end
+	end
+	return defaultVal
+end
+function opts.getCondVal(opstruct, ostyp)
+	return opts.getErpOption(opstruct, ostyp, "constrainTo", nil)
+end
+function opts.getIsStruct(opstruct, ostyp)
+	return opts.getErpOption(opstruct, ostyp, "structural", true)
+end
+function opts.getHasPrior(opstruct, ostyp)
+	return opts.getErpOption(opstruct, ostyp, "hasPrior", true)
+end
+function opts.getMass(opstruct, ostyp)
+	return opts.getErpOption(opstruct, ostyp, "mass", `1.0)
+end
+
+
+
 return
 {
 	RandVar = RandVar,
@@ -153,6 +183,7 @@ return
 	valueAs = valueAs,
 	overloadOnParams = overloadOnParams,
 	getCurrentERPID = getCurrentERPID,
+	opts = opts,
 	globals =
 	{
 		real = real
