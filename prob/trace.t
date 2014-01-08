@@ -551,11 +551,9 @@ end
 -- If it is there, return the quoted value
 -- Otherwise, return a defaultValue
 local function getErpOption(opstruct, ostyp, field, defaultVal)
-	if opstruct then
-		for _,e in ipairs(ostyp.entries) do
-			if e.field == field
-				then return `opstruct.[field]
-			end
+	for _,e in ipairs(ostyp.entries) do
+		if e.field == field
+			then return `opstruct.[field]
 		end
 	end
 	return defaultVal

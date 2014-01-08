@@ -424,6 +424,13 @@ local function makeERP(sample, logprobfn, propose)
 		end)
 	end
 
+	-- When no options struct is provided, we can construct a default one
+	--    (and its type) using this function
+	local function defaultOpStructAndType()
+		local struct OpStruct {}
+		return (`OpStruct{}), OpStruct
+	end
+
 	-- Generate an overloaded function which does the ERP call
 	-- Memoize results for different specializations
 	return spec.specializable(function(...)
@@ -438,31 +445,25 @@ local function makeERP(sample, logprobfn, propose)
 			local params = {}
 			for i=1,numParams do table.insert(params, (select(i,...))) end
 			local opstruct = nil
-			if select("#",...) == numParams+1 then opstruct = (select(numParams+1, ...)) end
+			local OpstructType = nil
+			if select("#",...) == numParams+1 then
+				opstruct = (select(numParams+1, ...))
+				OpstructType = opstruct:gettype()
+			else
+				opstruct, OpstructType = defaultOpStructAndType()
+			end
 			local paramtypes = {}
 			for _,p in ipairs(params) do table.insert(paramtypes, p:gettype()) end 
 			local paramsyms = {}
 			for _,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end			
 			local RandVarType = createRandVarFromCallsite(V, sample, logprobfn, propose, computation, unpack(paramtypes))
-			local erpfn = nil
-			if opstruct then
-				local OpstructType = opstruct:gettype()
-				erpfn = terra(optionStruct: OpstructType, [paramsyms])
-					return [trace.lookupVariableValue(RandVarType, `optionStruct, OpstructType, paramsyms, specParams)]
-				end
-			else
-				erpfn = terra([paramsyms])
-					return [trace.lookupVariableValue(RandVarType, nil, nil, paramsyms, specParams)]
-				end
+			local terra erpfn(optionStruct: OpstructType, [paramsyms])
+				return [trace.lookupVariableValue(RandVarType, `optionStruct, OpstructType, paramsyms, specParams)]
 			end
 			-- The ERP must push an ID to the callsite stack.
 			erpfn = trace.pfn(specParams)(erpfn)
 			-- Generate call to function
-			if opstruct then
-				return `erpfn(opstruct, [params])
-			else
-				return `erpfn([params])
-			end
+			return `erpfn(opstruct, [params])
 		end)
 	end)
 end
