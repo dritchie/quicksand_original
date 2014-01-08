@@ -272,33 +272,26 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	end
 	paramsyms = {}
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-	terra RandVarFromFunctionsT:checkForUpdates(mass: double, [paramsyms])
+	terra RandVarFromFunctionsT:checkForUpdates(options: OpstructType, [paramsyms])
 		var hasChanges = false
+		var mass = [erph.opts.getMass(`options, OpstructType)]
 		[checkParams(self, hasChanges)]
 		if not self.isStructural and (mass ~= self.mass) then
 			self.mass = mass
 			self.invMass = 1.0/mass
 			hasChanges = true
 		end
-		if hasChanges then
-			self:updateLogprob()
-		end
-	end
-	paramsyms = {}
-	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-	terra RandVarFromFunctionsT:checkForUpdates(val: ValType, mass: double, [paramsyms])
-		var hasChanges = false
-		[checkParams(self, hasChanges)]
-		if not self.isStructural and (mass ~= self.mass) then
-			self.mass = mass
-			self.invMass = 1.0/mass
-			hasChanges = true
-		end
-		if not (self.value == val) then
-			m.destruct(self.value)
-			self.value = m.copy(val)
-			hasChanges = true
-		end
+		[erph.opts.getIsCond(`options, OpstructType) and
+		quote
+			var val = [erph.opts.getCondVal(`options, OpstructType)]
+			if not (self.value == val) then
+				m.destruct(self.value)
+				self.value = m.copy(val)
+				hasChanges = true
+			end
+		end or
+			quote end
+		]
 		if hasChanges then
 			self:updateLogprob()
 		end

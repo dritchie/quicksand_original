@@ -549,15 +549,13 @@ end
 
 local function lookupVariableValueStructural(RandVarType, opstruct, OpstructType, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
-	local condVal = erp.opts.getCondVal(opstruct, OpstructType)
 	local isstruct = erp.opts.getIsStruct(opstruct, OpstructType)
-	local mass = erp.opts.getMass(opstruct, OpstructType)
 	local hasPrior = erp.opts.getHasPrior(opstruct, OpstructType)
 	return quote
 		var rv = [&RandVarType](globTrace:lookupVariableStructural(isstruct))
 		if rv ~= nil then
 			-- Check for changes that necessitate a logprob update
-			[condVal and (`rv:checkForUpdates(condVal, mass, [params])) or (`rv:checkForUpdates(mass, [params]))]
+			rv:checkForUpdates(opstruct, [params])
 		else
 			var depth = callsiteStack.size
 			-- Make new variable, add to master list of vars, add to newlogprob
@@ -579,13 +577,11 @@ end
 
 local function lookupVariableValueNonStructural(RandVarType, opstruct, OpstructType, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
-	local condVal = erp.opts.getCondVal(opstruct, OpstructType)
-	local mass = erp.opts.getMass(opstruct, OpstructType)
 	local hasPrior = erp.opts.getHasPrior(opstruct, OpstructType)
 	return quote
 		var rv = [&RandVarType](globTrace:lookupVariableNonStructural())
 		-- Check for changes that necessitate a logprob update
-		[condVal and (`rv:checkForUpdates(condVal, mass, [params])) or (`rv:checkForUpdates(mass, [params]))]
+			rv:checkForUpdates(opstruct, [params])
 		-- Add to logprob, set active
 		rv.isActive = true
 		if hasPrior then
