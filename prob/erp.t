@@ -426,7 +426,7 @@ local function makeERP(sample, logprobfn, propose)
 
 	-- Generate an overloaded function which does the ERP call
 	-- Memoize results for different specializations
-	local genErpFunction = spec.specializable(function(...)
+	return spec.specializable(function(...)
 		local specParams = spec.paramListToTable(...)
 		local V = spec.paramFromTable("scalarType", specParams)
 		local computation = spec.paramFromTable("computation", specParams)
@@ -434,7 +434,6 @@ local function makeERP(sample, logprobfn, propose)
 		local numParams = #specSample:gettype().parameters
 		-- All overloads must have same return type, so this is fine.
 		local rettype = specSample:gettype().returns[1]
-
 		return macro(function(...)
 			local params = {}
 			for i=1,numParams do table.insert(params, (select(i,...))) end
@@ -464,17 +463,6 @@ local function makeERP(sample, logprobfn, propose)
 			else
 				return `erpfn([params])
 			end
-		end)
-	end)
-
-	-- Finally, wrap everything in a function that extracts options from the
-	-- options struct.
-	return spec.specializable(function(...)
-		local paramTable = spec.paramListToTable(...)
-		local erpfn = genErpFunction(paramTable)
-		return macro(function(...)
-			local args = {...}
-			return `erpfn([args])
 		end)
 	end)
 end
