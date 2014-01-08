@@ -79,6 +79,8 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 			return quote
 				self.value:getRealComponents(comps)
 			end
+		else
+			return quote end
 		end
 	end
 	local function genSetReals(self, comps, index)
@@ -98,6 +100,8 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 			return quote
 				self.value:setRealComponents(comps, index)
 			end
+		else
+			return quote end
 		end
 	end
 
@@ -126,7 +130,7 @@ end)
 --    * ... Variadic arguments are the types of the parameters to the ERP (essentially specifying which overload
 --          of the provided functions we're using)
 local RandVarFromFunctions
-RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTemplate, proposeTemplate, ...)
+RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTemplate, proposeTemplate, OpstructType, ...)
 	local paramtypes = {...}
 
 	local sample = sampleTemplate(scalarType)
@@ -183,20 +187,19 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		return lines
 	end
 
-	---- Constructors take extra parameters
-	-- Ctor 1: Take in a value argument 
+	-- Constructor
 	local paramsyms = {}
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-	terra RandVarFromFunctionsT:__construct(val: ValType, isstruct: bool, iscond: bool, depth: uint, mass: double, [paramsyms])
-		ParentClass.__construct(self, val, isstruct, iscond, depth, mass)
-		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]
-		self:updateLogprob()
-	end
-	-- Ctor 2: No value argument, sample one instead
-	paramsyms = {}
-	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
-	terra RandVarFromFunctionsT:__construct(isstruct: bool, iscond: bool, depth: uint, mass: double, [paramsyms])
-		var val = sample([paramsyms])
+	terra RandVarFromFunctionsT:__construct(depth: uint, options: OpstructType, [paramsyms])
+		var isstruct = [erph.opts.getIsStruct(`options, OpstructType)]
+		var mass = [erph.opts.getMass(`options, OpstructType)]
+		var iscond = [erph.opts.getIsCond(`options, OpstructType)]
+		var val : ValType
+		[erph.opts.getIsCond(`options, OpstructType) and
+			quote val = [erph.opts.getCondVal(`options, OpstructType)] end
+		or
+			quote val = sample([paramsyms]) end
+		]
 		ParentClass.__construct(self, val, isstruct, iscond, depth, mass)
 		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]
 		self:updateLogprob()
@@ -366,12 +369,13 @@ local function RandVarFromCallsite(scalarType, computation, callsiteID)
 	return class
 end
 -- As with RandVarFromFunctions, variadic args are the parameter types for the ERP.
-local function createRandVarFromCallsite(scalarType, sample, logprobfn, propose, computation, ...)
+local function createRandVarFromCallsite(scalarType, sample, logprobfn, propose, computation, OpstructType, ...)
 	local id = erph.getCurrentERPID()
 
 	local struct RandVarFromCallsiteT {}
+	RandVarFromCallsiteT.OpstructType = OpstructType
 	RandVarFromCallsiteT.paramTypes = {...}
-	local ParentClass = RandVarFromFunctions(scalarType, sample, logprobfn, propose, ...)
+	local ParentClass = RandVarFromFunctions(scalarType, sample, logprobfn, propose, OpstructType, ...)
 	inheritance.dynamicExtend(ParentClass, RandVarFromCallsiteT)
 
 	-- The only extra functionality provided by this subclass is deepcopy.
@@ -379,11 +383,13 @@ local function createRandVarFromCallsite(scalarType, sample, logprobfn, propose,
 	--   parameter types, which may vary from callsite to callsite.
 	virtualTemplate(RandVarFromCallsiteT, "deepcopy", function(P) return {}->{&RandVar(P)} end, function(P)
 		local RandVarFromCallsiteP = RandVarFromCallsite(P, computation, id)
-		local RandVarFromFunctionsP = RandVarFromFunctions(P, sample, logprobfn, propose, unpack(RandVarFromCallsiteP.paramTypes))
+		local RandVarFromFunctionsP = RandVarFromFunctions(P, sample, logprobfn, propose, RandVarFromCallsiteP.OpstructType,
+														   unpack(RandVarFromCallsiteP.paramTypes))
 		return terra(self: &RandVarFromCallsiteT)
 			var newvar = m.new(RandVarFromCallsiteP)
 			-- Can just call the parent class __templatecopy since there's no new copy functionality added.
-			[RandVarFromFunctionsP.__templatecopy(scalarType, unpack(RandVarFromCallsiteT.paramTypes))](newvar, self)
+			[RandVarFromFunctionsP.__templatecopy(scalarType, RandVarFromCallsiteT.OpstructType,
+												  unpack(RandVarFromCallsiteT.paramTypes))](newvar, self)
 			return newvar
 		end
 	end)
@@ -456,7 +462,7 @@ local function makeERP(sample, logprobfn, propose)
 			for _,p in ipairs(params) do table.insert(paramtypes, p:gettype()) end 
 			local paramsyms = {}
 			for _,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end			
-			local RandVarType = createRandVarFromCallsite(V, sample, logprobfn, propose, computation, unpack(paramtypes))
+			local RandVarType = createRandVarFromCallsite(V, sample, logprobfn, propose, computation, OpstructType, unpack(paramtypes))
 			local terra erpfn(optionStruct: OpstructType, [paramsyms])
 				return [trace.lookupVariableValue(RandVarType, `optionStruct, OpstructType, paramsyms, specParams)]
 			end

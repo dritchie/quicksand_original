@@ -550,7 +550,6 @@ end
 local function lookupVariableValueStructural(RandVarType, opstruct, OpstructType, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
 	local condVal = erp.opts.getCondVal(opstruct, OpstructType)
-	local iscond = condVal ~= nil
 	local isstruct = erp.opts.getIsStruct(opstruct, OpstructType)
 	local mass = erp.opts.getMass(opstruct, OpstructType)
 	local hasPrior = erp.opts.getHasPrior(opstruct, OpstructType)
@@ -562,8 +561,7 @@ local function lookupVariableValueStructural(RandVarType, opstruct, OpstructType
 		else
 			var depth = callsiteStack.size
 			-- Make new variable, add to master list of vars, add to newlogprob
-			rv = [iscond and (`RandVarType.heapAlloc(condVal, isstruct, iscond, depth, mass, [params])) or
-							 (`RandVarType.heapAlloc(isstruct, iscond, depth, mass, [params]))]
+			rv = RandVarType.heapAlloc(depth, opstruct, [params])
 			globTrace.newlogprob = globTrace.newlogprob + rv.logprob
 			globTrace.lastVarList:push(rv)
 		end

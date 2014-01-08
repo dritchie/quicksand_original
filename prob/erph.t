@@ -163,6 +163,9 @@ end
 function opts.getCondVal(opstruct, ostyp)
 	return opts.getErpOption(opstruct, ostyp, "constrainTo", nil)
 end
+function opts.getIsCond(opstruct, ostyp)
+	return opts.getCondVal(opstruct, ostyp) ~= nil
+end
 function opts.getIsStruct(opstruct, ostyp)
 	return opts.getErpOption(opstruct, ostyp, "structural", true)
 end
