@@ -561,7 +561,7 @@ local function getErpOption(opstruct, ostyp, field, defaultVal)
 	return defaultVal
 end
 local function getCondVal(opstruct, ostyp)
-	return getErpOption(opstruct, ostyp, "constraintTo", nil)
+	return getErpOption(opstruct, ostyp, "constrainTo", nil)
 end
 local function getIsStruct(opstruct, ostyp)
 	return getErpOption(opstruct, ostyp, "structural", true)

@@ -435,8 +435,11 @@ local function makeERP(sample, logprobfn, propose)
 		-- All overloads must have same return type, so this is fine.
 		local rettype = specSample:gettype().returns[1]
 
-		return macro(function(opstruct, ...)
-			local params = {...}
+		return macro(function(...)
+			local params = {}
+			for i=1,numParams do table.insert(params, (select(i,...))) end
+			local opstruct = nil
+			if select("#",...) == numParams+1 then opstruct = (select(numParams+1, ...)) end
 			local paramtypes = {}
 			for _,p in ipairs(params) do table.insert(paramtypes, p:gettype()) end 
 			local paramsyms = {}
@@ -468,16 +471,10 @@ local function makeERP(sample, logprobfn, propose)
 	-- options struct.
 	return spec.specializable(function(...)
 		local paramTable = spec.paramListToTable(...)
+		local erpfn = genErpFunction(paramTable)
 		return macro(function(...)
-			local params = {}
-			for i=1,numparams do table.insert(params, (select(i,...))) end
-			local opstruct = (select(numparams+1, ...))
-			local erpfn = genErpFunction(paramTable)
-			if opstruct then
-				return `erpfn(opstruct, [params])
-			else
-				return `erpfn([params])
-			end
+			local args = {...}
+			return `erpfn([args])
 		end)
 	end)
 end
