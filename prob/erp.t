@@ -430,58 +430,39 @@ local function makeERP(sample, logprobfn, propose)
 		local specParams = spec.paramListToTable(...)
 		local V = spec.paramFromTable("scalarType", specParams)
 		local computation = spec.paramFromTable("computation", specParams)
+		local specSample = sample(V)
+		local numParams = #specSample:gettype().parameters
+		-- All overloads must have same return type, so this is fine.
+		local rettype = specSample:gettype().returns[1]
 
-		return macro(function(...)
-			local args = {...}
-			local specSample = sample(V)
-			local numParams = #specSample:gettype().parameters
-			-- Check whether this is a conditioned or unconditioned ERP
+		return macro(function(opstruct, ...)
+			local params = {...}
 			local paramtypes = {}
-			local isCond = false
-			if #args == numParams + 4 then
-				isCond = true
-				for i=5,#args do table.insert(paramtypes, args[i]:gettype()) end
-			elseif #args == numParams + 3 then
-				for i=4,#args do table.insert(paramtypes, args[i]:gettype()) end
-			else
-				print(#args, numParams)
-				error("Unexpected number of arguments to ERP function call.")
-			end
-			local rettype = specSample:gettype().returns[1]	-- All overloads must have same return type, so this is fine.
+			for _,p in ipairs(params) do table.insert(paramtypes, p:gettype()) end 
+			local paramsyms = {}
+			for _,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end			
 			local RandVarType = createRandVarFromCallsite(V, sample, logprobfn, propose, computation, unpack(paramtypes))
-			local params = {}
-			for _,t in ipairs(paramtypes) do table.insert(params, symbol(t)) end
 			local erpfn = nil
-			if isCond then
-				erpfn = terra(isstruct: bool, hasPrior: bool, condVal: rettype, mass: double, [params])
-					return [trace.lookupVariableValue(RandVarType, isstruct, hasPrior, true, condVal, mass, params, specParams)]
+			if opstruct then
+				local OpstructType = opstruct:gettype()
+				erpfn = terra(optionStruct: OpstructType, [paramsyms])
+					return [trace.lookupVariableValue(RandVarType, `optionStruct, OpstructType, paramsyms, specParams)]
 				end
 			else
-				erpfn = terra(isstruct: bool, hasPrior: bool, mass: double, [params])
-					return [trace.lookupVariableValue(RandVarType, isstruct, hasPrior, false, nil, mass, params, specParams)]
+				erpfn = terra([paramsyms])
+					return [trace.lookupVariableValue(RandVarType, nil, nil, paramsyms, specParams)]
 				end
 			end
 			-- The ERP must push an ID to the callsite stack.
 			erpfn = trace.pfn(specParams)(erpfn)
 			-- Generate call to function
-			return `erpfn([args])
+			if opstruct then
+				return `erpfn(opstruct, [params])
+			else
+				return `erpfn([params])
+			end
 		end)
 	end)
-
-	-- Look for 'field' in 'opstruct'
-	-- If it is there, return the quoted value
-	-- Otherwise, return a defaultValue
-	local function getField(opstruct, field, defaultVal)
-		if opstruct then
-			local t = opstruct:gettype()
-			for _,e in ipairs(t.entries) do
-				if e.field == field
-					then return `opstruct.[field]
-				end
-			end
-		end
-		return defaultVal
-	end
 
 	-- Finally, wrap everything in a function that extracts options from the
 	-- options struct.
@@ -491,15 +472,11 @@ local function makeERP(sample, logprobfn, propose)
 			local params = {}
 			for i=1,numparams do table.insert(params, (select(i,...))) end
 			local opstruct = (select(numparams+1, ...))
-			local isstruct = getField(opstruct, "structural", true)
-			local condval = getField(opstruct, "constrainTo", nil)
-			local mass = getField(opstruct, "mass", `1.0)
-			local hasPrior = getField(opstruct, "hasPrior", true)
 			local erpfn = genErpFunction(paramTable)
-			if condval then
-				return `erpfn(isstruct, hasPrior, condval, mass, [params])
+			if opstruct then
+				return `erpfn(opstruct, [params])
 			else
-				return `erpfn(isstruct, hasPrior, mass, [params])
+				return `erpfn([params])
 			end
 		end)
 	end)

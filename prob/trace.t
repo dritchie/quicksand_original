@@ -547,14 +547,44 @@ local function newTrace(computation, ProbType)
 	return `TraceType.heapAlloc()
 end
 
-local function lookupVariableValueStructural(RandVarType, isstruct, hasPrior, iscond, condVal, mass, params, specParams)
+-- Look for 'field' in 'opstruct'
+-- If it is there, return the quoted value
+-- Otherwise, return a defaultValue
+local function getErpOption(opstruct, ostyp, field, defaultVal)
+	if opstruct then
+		for _,e in ipairs(ostyp.entries) do
+			if e.field == field
+				then return `opstruct.[field]
+			end
+		end
+	end
+	return defaultVal
+end
+local function getCondVal(opstruct, ostyp)
+	return getErpOption(opstruct, ostyp, "constraintTo", nil)
+end
+local function getIsStruct(opstruct, ostyp)
+	return getErpOption(opstruct, ostyp, "structural", true)
+end
+local function getHasPrior(opstruct, ostyp)
+	return getErpOption(opstruct, ostyp, "hasPrior", true)
+end
+local function getMass(opstruct, ostyp)
+	return getErpOption(opstruct, ostyp, "mass", `1.0)
+end
+
+local function lookupVariableValueStructural(RandVarType, opstruct, OpstructType, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
-	local q =
-	quote
+	local condVal = getCondVal(opstruct, OpstructType)
+	local iscond = condVal ~= nil
+	local isstruct = getIsStruct(opstruct, OpstructType)
+	local mass = getMass(opstruct, OpstructType)
+	local hasPrior = getHasPrior(opstruct, OpstructType)
+	return quote
 		var rv = [&RandVarType](globTrace:lookupVariableStructural(isstruct))
 		if rv ~= nil then
 			-- Check for changes that necessitate a logprob update
-			[iscond and (`rv:checkForUpdates(condVal, mass, [params])) or (`rv:checkForUpdates(mass, [params]))]
+			[condVal and (`rv:checkForUpdates(condVal, mass, [params])) or (`rv:checkForUpdates(mass, [params]))]
 		else
 			var depth = callsiteStack.size
 			-- Make new variable, add to master list of vars, add to newlogprob
@@ -573,15 +603,17 @@ local function lookupVariableValueStructural(RandVarType, isstruct, hasPrior, is
 	in
 		retval
 	end
-	return q
 end
 
-local function lookupVariableValueNonStructural(RandVarType, isstruct, hasPrior, iscond, condVal, mass, params, specParams)
+local function lookupVariableValueNonStructural(RandVarType, opstruct, OpstructType, params, specParams)
 	local globTrace = globalTrace(spec.paramFromTable("scalarType", specParams))
+	local condVal = getCondVal(opstruct, OpstructType)
+	local mass = getMass(opstruct, OpstructType)
+	local hasPrior = getHasPrior(opstruct, OpstructType)
 	return quote
 		var rv = [&RandVarType](globTrace:lookupVariableNonStructural())
 		-- Check for changes that necessitate a logprob update
-		[iscond and (`rv:checkForUpdates(condVal, mass, [params])) or (`rv:checkForUpdates(mass, [params]))]
+		[condVal and (`rv:checkForUpdates(condVal, mass, [params])) or (`rv:checkForUpdates(mass, [params]))]
 		-- Add to logprob, set active
 		rv.isActive = true
 		if hasPrior then
@@ -594,19 +626,19 @@ local function lookupVariableValueNonStructural(RandVarType, isstruct, hasPrior,
 	end
 end
 
-local function lookupVariableValue(RandVarType, isstruct, hasPrior, iscond, condVal, mass, params, specParams)
+local function lookupVariableValue(RandVarType, opstruct, OpstructType, params, specParams)
 	local doingInference = spec.paramFromTable("doingInference", specParams)
 	-- If we're not running in an inference engine, then just return the value directly.
 	if not doingInference then
-		return (iscond and condVal or (`RandVarType.sample([params])))
+		return (getCondVal(opstruct, OpstructType) or (`RandVarType.sample([params])))
 	end
 	-- Otherwise, the algorithm for variable lookup depends on whether the program control
 	--    structure is fixed or variable.
 	local structureChange = spec.paramFromTable("structureChange", specParams)
 	if structureChange then
-		return lookupVariableValueStructural(RandVarType, isstruct, hasPrior, iscond, condVal, mass, params, specParams)
+		return lookupVariableValueStructural(RandVarType, opstruct, OpstructType, params, specParams)
 	else
-		return lookupVariableValueNonStructural(RandVarType, isstruct, hasPrior, iscond, condVal, mass, params, specParams)
+		return lookupVariableValueNonStructural(RandVarType, opstruct, OpstructType, params, specParams)
 	end
 end
 
