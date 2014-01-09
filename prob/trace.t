@@ -479,9 +479,9 @@ RandExecTrace = templatize(function(ProbType, computation)
 
 			-- Run computation
 			if self.hasReturnValue then m.destruct(self.returnValue) end
-			-- C.printf("--- START ---\n")
+			C.printf("--- traceUpdate START (ProbType: %s)---\n", [tostring(ProbType)])
 			self.returnValue = speccomp()
-			-- C.printf("---  END  ---\n")
+			C.printf("---  traceUpdate END  ---\n")
 			self.hasReturnValue = true
 
 			-- Clean up
@@ -569,7 +569,7 @@ local function lookupVariableValueStructural(RandVarType, opstruct, OpstructType
 			globTrace.logprob = globTrace.logprob + rv.logprob
 		end
 		globTrace.varlist:push(rv)
-		var retval = m.copy(rv.value)
+		var retval = m.copy(rv:getValue())
 	in
 		retval
 	end
@@ -588,7 +588,7 @@ local function lookupVariableValueNonStructural(RandVarType, opstruct, OpstructT
 			globTrace.logprob = globTrace.logprob + rv.logprob
 			-- C.printf("add prior: %g, lp = %g\n", ad.val(rv.logprob), ad.val(globTrace.logprob))
 		end
-		var retval = m.copy(rv.value)
+		var retval = m.copy(rv:getValue())
 	in
 		retval
 	end

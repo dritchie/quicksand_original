@@ -106,7 +106,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			self.adNonstructuralVars:get(i):setRealComponents(&self.indepVarNums, &index)
 		end
 		-- Also need to force logprob updates for all the structural vars, since their
-		--    logprob values will be invalidated be previous calls to grad()
+		--    logprob values will be invalidated by the previous calls to grad()
 		for i=0,self.adStructuralVars.size do
 			self.adStructuralVars(i):rescore()
 		end
@@ -182,6 +182,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 	-- Search for a decent step size
 	-- (Code adapted from Stan)
 	terra HMCKernelT:searchForStepSize()
+		C.printf("searching for HMC step size...\n")
 		self.stepSize = 1.0
 		var pos = m.copy(self.positions)
 		var grad = m.copy(self.gradient)
@@ -192,12 +193,14 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		var direction = -1
 		if H > ad.math.log(0.5) then direction = 1 end
 		while true do
+			-- C.printf("%g\n", self.stepSize)
 			m.destruct(pos)
 			m.destruct(grad)
 			pos = m.copy(self.positions)
 			grad = m.copy(self.gradient)
 			self:sampleMomenta()
 			lp = self:leapfrog(&pos, &grad)
+			-- C.printf("%g, %g\n", pos(0), grad(0))
 			H = lp - lastlp
 			-- If our initial step improved the posterior by more than 0.5, then
 			--    keep doubling step size until the initial step improves by as
@@ -222,6 +225,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 				util.fatalError("Bad (discontinuous?) posterior - HMC step size search collapsed to zero.\n")
 			end
 		end
+		C.printf("done searching for HMC step size\n")
 		m.destruct(pos)
 		m.destruct(grad)
 	end
@@ -341,7 +345,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		self:initInverseMasses(currTrace)
 
 		-- Initialize the gradient
-		self:logProbAndGrad(&self.positions, &self.gradient) 
+		C.printf("initializing logprob and gradient for HMC kernel...\n")
+		self:logProbAndGrad(&self.positions, &self.gradient)
+		C.printf("done initializing logprob and gradient for HMC kernel\n")
 
 		-- If the stepSize wasn't specified, try to find a decent one.
 		if self.stepSize <= 0.0 then
@@ -397,12 +403,12 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		var newlp : double
 		for i=0,numSteps do
 			newlp = self:leapfrog(&pos, &grad)
+			-- C.printf("pos: %g, grad: %g, lp: %g\n", pos(0), grad(0), newlp)
 		end
 		-- C.printf("--- TRAJECTORY END ---\n")
 
-		-- C.printf("%g, %g            \n", grad(grad.size-2), grad(grad.size-1))
-		-- C.printf("%g                    \n", self.stepSize)
-		-- C.printf("%g              \n", newlp)
+		-- C.printf("stepSize: %g                    \n", self.stepSize)
+		-- C.printf("finalLP: %g              \n", newlp)
 
 		-- If we're doing PMR, we need to negate momentum
 		[util.optionally(doingPMR, function() return quote
@@ -421,6 +427,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		var H_new = (self:kineticEnergy() + newlp)/currTrace.temperature 
 
 		var dH = H_new - H
+		-- C.printf("exp(dH): %g\n", ad.math.exp(dH))
 
 		-- Update step size, if we're doing adaptive step sizes
 		if stepSizeAdapt and self.adapter.adapting then

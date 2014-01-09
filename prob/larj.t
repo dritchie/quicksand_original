@@ -74,19 +74,19 @@ local InterpolationRandVar = templatize(function(ProbType)
 	terra InterpolationRandVarT:proposeNewValue() : {ProbType, ProbType}
 		self:checkInvalidStructInterpOp()
 		var fwdPropLP, rvsPropLP = self.rv1:proposeNewValue()
-		self.rv2:setValue(self.rv1:pointerToValue())
+		self.rv2:setRawValue(self.rv1:pointerToValue())
 		self.logprob = self.rv1.logprob
 		return fwdPropLP, rvsPropLP
 	end
 	inheritance.virtual(InterpolationRandVarT, "proposeNewValue")
 
-	terra InterpolationRandVarT:setValue(valptr: &opaque) : {}
+	terra InterpolationRandVarT:setRawValue(valptr: &opaque) : {}
 		self:checkInvalidStructInterpOp()
-		self.rv1:setValue(valptr)
-		self.rv2:setValue(valptr)
+		self.rv1:setRawValue(valptr)
+		self.rv2:setRawValue(valptr)
 		self.logprob = self.rv1.logprob
 	end
-	inheritance.virtual(InterpolationRandVarT, "setValue")
+	inheritance.virtual(InterpolationRandVarT, "setRawValue")
 
 	terra InterpolationRandVarT:getRealComponents(comps: &Vector(ProbType)) : {}
 		self:checkInvalidStructInterpOp()

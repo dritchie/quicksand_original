@@ -13,6 +13,7 @@ local trace = terralib.require("prob.trace")
 local spec = terralib.require("prob.specialize")
 local ad = terralib.require("ad")
 
+local C = terralib.includec("stdio.h")
 
 -- Every random variable has some value type; this intermediate
 -- class manages that
@@ -121,6 +122,13 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 	return RandVarWithValT
 end)
 
+-- Some utility functions for bounded variable transforms
+local logistic = macro(function(x)
+	return `1.0 / (1.0 + ad.math.exp(-x))
+end)
+local invlogistic = macro(function(y)
+	return `-ad.math.log(1.0/y - 1.0)
+end)
 
 -- Finally, at the bottom of the hierarchy, we have random primitives defined by a set of functions
 --    * The type of scalar values (doubles or ad.nums)
@@ -139,17 +147,35 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 
 	-- Can't handle functions with multiple return values
 	assert(#sample:getdefinitions()[1]:gettype().returns == 1)
+
 	-- All overloads of the sampling function must have the same return type
 	local ValType = sample:getdefinitions()[1]:gettype().returns[1]
 	for i=2,#sample:getdefinitions() do assert(sample:getdefinitions()[i]:gettype().returns[1] == ValType) end
 
 	local ProbType = scalarType
 
+	-- Some flags that we need to use repeatedly
+	local hasCondVal = erph.opts.hasCondVal(OpstructType)
+	local hasLowerBound = erph.opts.hasLowerBound(OpstructType)
+	local hasUpperBound = erph.opts.hasUpperBound(OpstructType)
+
 	-- Initialize the class we're building
 	local struct RandVarFromFunctionsT {}
 	RandVarFromFunctionsT.ValType = ValType
 	local ParentClass = RandVarWithVal(ProbType, ValType)
 	inheritance.dynamicExtend(ParentClass, RandVarFromFunctionsT)
+
+	-- Add upper/lower bounds, if provided
+	if erph.opts.hasLowerBound(OpstructType) then
+		local t = erph.opts.typeOfErpOption(OpstructType, "lowerBound")
+		-- local t = ValType
+		RandVarFromFunctionsT.entries:insert({field = "lowerBound", type = t})
+	end
+	if erph.opts.hasUpperBound(OpstructType) then
+		local t = erph.opts.typeOfErpOption(OpstructType, "upperBound")
+		-- local t = ValType
+		RandVarFromFunctionsT.entries:insert({field = "upperBound", type = t})
+	end
 
 	-- Add one field for each parameter
 	local paramFieldNames = {}
@@ -173,19 +199,57 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		end
 		return ret
 	end
-	local function genParamCopyBlock(self, other, otherparamtypes)
-		local selfparamexprs = genParamFieldsExpList(self)
-		local otherparamexprs = genParamFieldsExpList(other)
-		local lines = {}
-		for i=1,#paramtypes do
-			if paramtypes[i] == otherparamtypes[i] then
-				table.insert(lines, quote [selfparamexprs[i]] = m.copy([otherparamexprs[i]]) end)
-			else
-				table.insert(lines, quote [selfparamexprs[i]] = [m.templatecopy(ProbType)]([otherparamexprs[i]]) end)
+
+	-- Transforms (and their inverses) for bounded variables
+	local forwardTransform = macro(function(self, x) return x end)
+	local inverseTransform = macro(function(self, y) return y end)
+	local priorAdjustment = macro(function(self, x) return `0.0 end)
+	if hasLowerBound and hasUpperBound then
+		forwardTransform = macro(function(self, x)
+			return quote
+				var logit = logistic(x)
+				if x > [-math.huge] and logit == 0.0 then logit = 1e-15 end
+				if x < [math.huge] and logit == 1.0 then logit = [1.0 - 1e-15] end
+				C.printf("bounds: [%f, %f]                \n", ad.val(self.lowerBound), ad.val(self.upperBound))
+			in
+				self.lowerBound + (self.upperBound - self.lowerBound) * logit
 			end
-		end
-		return lines
+		end)
+		inverseTransform = macro(function(self, y)
+			return `invlogistic((y - self.lowerBound) / (self.upperBound - self.lowerBound))
+		end)
+		priorAdjustment = macro(function(self, x)
+			-- Simplification of ad.math.log((self.upperBound - self.lowerBound) * logistic(x) * (1 - logistic(x)))
+			return `ad.math.log(self.upperBound - self.lowerBound) - x - 2.0*ad.math.log(1.0 + ad.math.exp(-x))
+		end)
+	elseif hasLowerBound then
+		forwardTransform = macro(function(self, x) return `ad.math.exp(x) + self.lowerBound end)
+		inverseTransform = macro(function(self, y) return `ad.math.log(y - self.lowerBound) end)
+		priorAdjustment = macro(function(self, x) return x end)
+	elseif hasUpperBound then
+		forwardTransform = macro(function(self, x) return `self.upperBound - ad.math.exp(x) end)
+		inverseTransform = macro(function(self, y) return `ad.math.log(self.upperBound - y) end)
+		priorAdjustment = macro(function(self, x) return x end)
 	end
+	RandVarFromFunctionsT.methods.forwardTransform = forwardTransform
+	RandVarFromFunctionsT.methods.inverseTransform = inverseTransform
+	RandVarFromFunctionsT.methods.priorAdjustment = priorAdjustment
+
+	-- Get and set the variable's value, respecting these transforms
+	RandVarFromFunctionsT.methods.getValue = macro(function(self)
+		-- return `self:forwardTransform(self.value)
+		return quote
+			C.printf("getValue\n")
+		in
+			self:forwardTransform(self.value)
+		end
+	end)
+	RandVarFromFunctionsT.methods.setValue = macro(function(self, val)
+		return quote
+			m.destruct(self.value)
+			self.value = self:inverseTransform(m.copy(val))
+		end
+	end)
 
 	-- Constructor
 	local paramsyms = {}
@@ -193,13 +257,20 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	terra RandVarFromFunctionsT:__construct(depth: uint, options: OpstructType, [paramsyms])
 		var isstruct = [erph.opts.getIsStruct(`options, OpstructType)]
 		var mass = [erph.opts.getMass(`options, OpstructType)]
-		var iscond = [erph.opts.getIsCond(`options, OpstructType)]
+		var iscond = hasCondVal
 		var val : ValType
-		[erph.opts.getIsCond(`options, OpstructType) and
+		[hasCondVal and
 			quote val = [erph.opts.getCondVal(`options, OpstructType)] end
 		or
 			quote val = sample([paramsyms]) end
 		]
+		[util.optionally(hasLowerBound, function() return quote
+			self.lowerBound = [erph.opts.getLowerBound(`options, OpstructType)]
+		end end)]
+		[util.optionally(hasUpperBound, function() return quote
+			self.upperBound = [erph.opts.getUpperBound(`options, OpstructType)]
+		end end)]
+		val = self:inverseTransform(val)
 		ParentClass.__construct(self, val, isstruct, iscond, depth, mass)
 		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]
 		self:updateLogprob()
@@ -214,6 +285,19 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 
 	-- Copy constructor
 	-- Variadic args are paramtypes
+	local function genParamCopyBlock(self, other, otherparamtypes)
+		local selfparamexprs = genParamFieldsExpList(self)
+		local otherparamexprs = genParamFieldsExpList(other)
+		local lines = {}
+		for i=1,#paramtypes do
+			if paramtypes[i] == otherparamtypes[i] then
+				table.insert(lines, quote [selfparamexprs[i]] = m.copy([otherparamexprs[i]]) end)
+			else
+				table.insert(lines, quote [selfparamexprs[i]] = [m.templatecopy(ProbType)]([otherparamexprs[i]]) end)
+			end
+		end
+		return lines
+	end
 	RandVarFromFunctionsT.__templatecopy = templatize(function(P, ...)
 		local RVFFP = RandVarFromFunctions(P, sampleTemplate, logprobTemplate, proposeTemplate, ...)
 		local V = RVFFP.ValType
@@ -221,6 +305,12 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		return terra(self: &RandVarFromFunctionsT, other: &RVFFP)
 			[ParentClass.__templatecopy(P, V)](self, other)
 			[genParamCopyBlock(self, other, otherparamtypes)]
+			[util.optionally(hasLowerBound, function() return quote
+				self.lowerBound = other.lowerBound
+			end end)]
+			[util.optionally(hasUpperBound, function() return quote
+				self.upperBound = other.upperBound
+			end end)]
 		end
 	end)
 
@@ -245,7 +335,7 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		local checkexps = {}
 		for i,p in ipairs(paramsyms) do
 			local n = paramFieldNames[i]
-			-- We must *always* refresh params / updated logprobs
+			-- We must *always* refresh params / update logprobs
 			--   if we're using dual numbers. Otherwise, nums could
 			--   become stale after memory pool wipes and we'll end
 			--   up with mysterious segfaults.
@@ -273,25 +363,41 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	paramsyms = {}
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
 	terra RandVarFromFunctionsT:checkForUpdates(options: OpstructType, [paramsyms])
-		var hasChanges = false
+		-- We must always rescore if we're using AD, because the dual nums get wiped
+		--    out after every run.
+		var hasChanges = [scalarType == ad.num]
 		var mass = [erph.opts.getMass(`options, OpstructType)]
+		-- Check for changes in parameters
 		[checkParams(self, hasChanges)]
 		if not self.isStructural and (mass ~= self.mass) then
 			self.mass = mass
 			self.invMass = 1.0/mass
 			hasChanges = true
 		end
-		[erph.opts.getIsCond(`options, OpstructType) and
-		quote
-			var val = [erph.opts.getCondVal(`options, OpstructType)]
-			if not (self.value == val) then
+		-- Check for change in conditioned value.
+		[util.optionally(hasCondVal, function() return quote
+			var val = self:inverseTransform([erph.opts.getCondVal(`options, OpstructType)])
+			if util.istype(val, ad.num) or not (self.value == val) then
 				m.destruct(self.value)
 				self.value = m.copy(val)
 				hasChanges = true
 			end
-		end or
-			quote end
-		]
+		end end)]
+		-- Check for change in bounds
+		[util.optionally(hasLowerBound, function() return quote
+			var lowerBound = [erph.opts.getLowerBound(`options, OpstructType)]
+			if util.istype(lowerBound, ad.num) or not (self.lowerBound == lowerBound) then
+				self.lowerBound = lowerBound
+				hasChanges = true
+			end
+		end end)]
+		[util.optionally(hasUpperBound, function() return quote
+			var upperBound = [erph.opts.getUpperBound(`options, OpstructType)]
+			if util.istype(upperBound, ad.num) or not (self.upperBound == upperBound) then
+				self.upperBound = upperBound
+				hasChanges = true
+			end
+		end end)]
 		if hasChanges then
 			self:updateLogprob()
 		end
@@ -299,26 +405,26 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 
 	-- Update log probability
 	terra RandVarFromFunctionsT:updateLogprob() : {}
-		self.logprob = logprobfn(self.value, [genParamFieldsExpList(self)])
+		C.printf("updateLogprob\n")
+		self.logprob = self:priorAdjustment(self.value) + logprobfn(self:forwardTransform(self.value), [genParamFieldsExpList(self)])
 	end
 
 	-- Propose new value
 	terra RandVarFromFunctionsT:proposeNewValue() : {ProbType, ProbType}
-		var newval, fwdPropLP, rvsPropLP = propose(self.value, [genParamFieldsExpList(self)])
-		m.destruct(self.value)
-		self.value = newval
+		var newval, fwdPropLP, rvsPropLP = propose(self:forwardTransform(self.value), [genParamFieldsExpList(self)])
+		self:setValue(newval)
 		self:updateLogprob()
 		return fwdPropLP, rvsPropLP
 	end
 	inheritance.virtual(RandVarFromFunctionsT, "proposeNewValue")
 
 	-- Set the value directly
-	terra RandVarFromFunctionsT:setValue(valptr: &opaque) : {}
+	terra RandVarFromFunctionsT:setRawValue(valptr: &opaque) : {}
 		m.destruct(self.value)
 		self.value = m.copy(@([&ValType](valptr)))
 		self:updateLogprob()
 	end
-	inheritance.virtual(RandVarFromFunctionsT, "setValue")
+	inheritance.virtual(RandVarFromFunctionsT, "setRawValue")
 
 	-- Setting real components may require us to update the logprob.
 	terra RandVarFromFunctionsT:setRealComponents(comps: &Vector(ProbType), index: &uint) : {}

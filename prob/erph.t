@@ -56,7 +56,7 @@ RandVar = templatize(function(ProbType)
 	inheritance.purevirtual(RandVarT, "valueTypeID", {}->{uint64})
 	inheritance.purevirtual(RandVarT, "pointerToValue", {}->{&opaque})
 	inheritance.purevirtual(RandVarT, "proposeNewValue", {}->{ProbType,ProbType})
-	inheritance.purevirtual(RandVarT, "setValue", {&opaque}->{})
+	inheritance.purevirtual(RandVarT, "setRawValue", {&opaque}->{})
 	inheritance.purevirtual(RandVarT, "getRealComponents", {&Vector(ProbType)}->{})
 	inheritance.purevirtual(RandVarT, "setRealComponents", {&Vector(ProbType), &uint}->{})
 	inheritance.purevirtual(RandVarT, "rescore", {}->{})
@@ -148,23 +148,34 @@ spec.registerPreGlobalSpecializationEvent(resetERPID)
 
 -- Functions for retrieving options by name from the options struct passed to an ERP call.
 local opts = {}
-
--- Look for 'field' in 'opstruct'
--- If it is there, return the quoted value
--- Otherwise, return a defaultValue
-function opts.getErpOption(opstruct, ostyp, field, defaultVal)
+function opts.hasErpOption(ostyp, field)
 	for _,e in ipairs(ostyp.entries) do
 		if e.field == field
-			then return `opstruct.[field]
+			then return true
 		end
 	end
-	return defaultVal
+	return false
+end
+function opts.getErpOption(opstruct, ostyp, field, defaultVal)
+	if opts.hasErpOption(ostyp, field) then
+		return `opstruct.[field]
+	else
+		return defaultVal
+	end
+end
+function opts.typeOfErpOption(ostyp, field)
+	for _,e in ipairs(ostyp.entries) do
+		if e.field == field
+			then return e.type
+		end
+	end
+	return nil
+end
+function opts.hasCondVal(ostyp)
+	return opts.hasErpOption(ostyp, "constrainTo")
 end
 function opts.getCondVal(opstruct, ostyp)
 	return opts.getErpOption(opstruct, ostyp, "constrainTo", nil)
-end
-function opts.getIsCond(opstruct, ostyp)
-	return opts.getCondVal(opstruct, ostyp) ~= nil
 end
 function opts.getIsStruct(opstruct, ostyp)
 	return opts.getErpOption(opstruct, ostyp, "structural", true)
@@ -174,6 +185,18 @@ function opts.getHasPrior(opstruct, ostyp)
 end
 function opts.getMass(opstruct, ostyp)
 	return opts.getErpOption(opstruct, ostyp, "mass", `1.0)
+end
+function opts.hasLowerBound(ostyp)
+	return opts.hasErpOption(ostyp, "lowerBound")
+end
+function opts.getLowerBound(opstruct, ostyp)
+	return opts.getErpOption(opstruct, ostyp, "lowerBound", nil)
+end
+function opts.hasUpperBound(ostyp)
+	return opts.hasErpOption(ostyp, "upperBound")
+end
+function opts.getUpperBound(opstruct, ostyp)
+	return opts.getErpOption(opstruct, ostyp, "upperBound", nil)
 end
 
 

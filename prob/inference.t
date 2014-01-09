@@ -115,123 +115,6 @@ end,
 
 
 
--- -- Random walk kernel that runs an automatically differentiated version
--- --    of the program.
--- -- Only works on fixed-structure programs whose ERPs all have type double
--- -- This is not useful in practice, but it's useful for testing that AD dual
--- --     nums are working properly.
--- local RandVarAD = erp.RandVar(ad.num)
--- local BaseTraceAD = BaseTrace(ad.num)
--- local struct ADRandomWalkKernelT
--- {
--- 	proposalsMade: uint,
--- 	proposalsAccepted: uint,
--- 	adTrace: &BaseTraceAD,
--- 	lastTrace: &BaseTraceD,
--- 	adVars: Vector(&RandVarAD),
--- 	values: Vector(double)
--- }
--- inheritance.dynamicExtend(MCMCKernel, ADRandomWalkKernelT)
-
--- terra ADRandomWalkKernelT:__construct()
--- 	self.proposalsMade = 0
--- 	self.proposalsAccepted = 0
--- 	self.adTrace = nil
--- 	self.lastTrace = nil
--- 	m.init(self.adVars)
--- 	m.init(self.values)
--- end
-
--- terra ADRandomWalkKernelT:__destruct() : {}
--- 	m.destruct(self.adVars)
--- 	m.destruct(self.values)
--- 	if self.adTrace ~= nil then
--- 		m.delete(self.adTrace)
--- 	end
--- end
--- inheritance.virtual(ADRandomWalkKernelT, "__destruct")
-
--- terra ADRandomWalkKernelT:initWithNewTrace(currTrace: &BaseTraceD)
--- 	self.lastTrace = currTrace
--- 	if self.adTrace ~= nil then m.delete(self.adTrace) end
--- 	self.adTrace = [BaseTraceD.deepcopy(ad.num)](currTrace)
--- 	m.destruct(self.adVars)
--- 	self.adVars = self.adTrace:freeVars(false, true)
--- 	self.values:resize(self.adVars.size)
--- 	for i=0,self.values.size do
--- 		var val = [erp.valueAs(ad.num)](self.adVars:get(i))
--- 		self.values:set(i, val:val())
--- 	end
--- end
-
--- terra ADRandomWalkKernelT:next(currTrace: &BaseTraceD) : &BaseTraceD
--- 	self.proposalsMade = self.proposalsMade + 1
--- 	if self.lastTrace ~= currTrace then
--- 		self:initWithNewTrace(currTrace)
--- 	end
--- 	var nextTrace = self.adTrace
--- 	var freevars = &self.adVars
--- 	-- Set the variable values for our working AD trace
--- 	for i=0,self.values.size do
--- 		var adv = self.adVars:get(i)
--- 		@[&ad.num](adv:pointerToValue()) = self.values:get(i)
--- 	end
--- 	-- Have to traceUpdate once to flush any changes to parameters before
--- 	--    we can safely call proposeNewValue()
--- 	[trace.traceUpdate({structureChange=false, factorEval=false})](nextTrace)
--- 	-- Propose change to randomly-selected variable
--- 	var whichVar = rand.uniformRandomInt(0, freevars.size)
--- 	var v = freevars:get(whichVar)
--- 	var fwdPropLP, rvsPropLP = v:proposeNewValue()
--- 	-- Update trace
--- 	[trace.traceUpdate({structureChange=false})](nextTrace)
--- 	var acceptThresh = (nextTrace.logprob - currTrace.logprob)/currTrace.temperature  + rvsPropLP - fwdPropLP
--- 	if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
--- 		self.proposalsAccepted = self.proposalsAccepted + 1
--- 		-- Copy values back into currTrace, and into self.values
--- 		var oldfreevars = currTrace:freeVars(false, true)
--- 		for i=0,oldfreevars.size do
--- 			var newval = [erp.valueAs(ad.num)](freevars:get(i)):val()
--- 			oldfreevars:get(i):setValue(&newval)
--- 			self.values:set(i, newval)
--- 		end
--- 		m.destruct(oldfreevars)
--- 		-- Reconstruct return value by running a traceUpdate
--- 		-- (No need to evaluate any factors)
--- 		[trace.traceUpdate({structureChange=false, factorEval=false})](currTrace)
--- 		-- Set the final logprob (since we didn't evaluate factors)
--- 		[BaseTraceD.setLogprobFrom(ad.num)](currTrace, nextTrace)
--- 	end
--- 	-- Recover tape memory so we don't run out
--- 	ad.recoverMemory()
--- 	return currTrace
--- end
--- inheritance.virtual(ADRandomWalkKernelT, "next")
-
--- terra ADRandomWalkKernelT:name() : rawstring return [ADRandomWalkKernelT.name] end
--- inheritance.virtual(ADRandomWalkKernelT, "name")
-
--- terra ADRandomWalkKernelT:stats() : {}
--- 	C.printf("Acceptance ratio: %g (%u/%u)\n",
--- 		[double](self.proposalsAccepted)/self.proposalsMade,
--- 		self.proposalsAccepted,
--- 		self.proposalsMade)
--- end
--- inheritance.virtual(ADRandomWalkKernelT, "stats")
-
--- m.addConstructors(ADRandomWalkKernelT)
-
-
--- -- Convenience method for making ADRandomWalkKernelTs
--- local ADRandomWalk = makeKernelGenerator(
--- 	terra()
--- 		return ADRandomWalkKernelT.heapAlloc()
--- 	end,
--- 	{})
-
-
-
-
 
 
 -- MCMC Kernel that probabilistically selects between multiple sub-kernels
@@ -397,7 +280,9 @@ local function mcmc(computation, kernelgen, params)
 	local terra chain()
 		var kernel = [kernelgen()]
 		var samps = [Vector(Sample(RetValType))].stackAlloc()
+		C.printf("initializing trace...\n")
 		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
+		C.printf("done initializing trace\n")
 		var t0 = 0.0
 		for i=0,iters do
 			if verbose then
