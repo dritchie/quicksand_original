@@ -19,13 +19,11 @@ local C = terralib.includecstring [[
 #include <stdio.h>
 ]]
 
-
-
 -- Kernel for doing Hamiltonian Monte Carlo proposals
 -- Only makes proposals to non-structural variables
 local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 									  stepSizeAdapt, adaptationRate,
-									  pmrAlpha)
+									  pmrAlpha, verbosity)
 	local doingPMR = pmrAlpha > 0.0
 	local targetAcceptRate = (numSteps == 1) and 0.57 or 0.65
 	local struct HMCKernelT
@@ -189,6 +187,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		if H > ad.math.log(0.5) then direction = 1 end
 		while true do
 			-- C.printf("%g\n", self.stepSize)
+			-- C.printf("%g\n", lp)
 			m.destruct(pos)
 			m.destruct(grad)
 			pos = m.copy(self.positions)
@@ -391,18 +390,25 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		var H = (self:kineticEnergy() + currTrace.logprob)/currTrace.temperature 
 
 		-- Do leapfrog steps
-		-- C.printf("--- TRAJECTORY START ---\n")
+		[util.optionally(verbosity > 0, function() return quote
+			C.printf("--- TRAJECTORY START ---\n")
+			C.printf("stepSize: %g\n", self.stepSize)
+			C.printf("initialLP: %g\n", currTrace.logprob)
+			C.printf("H: %g\n", H)
+		end end)]
 		var pos = m.copy(self.positions)
 		var grad = m.copy(self.gradient)
 		var newlp : double
 		for i=0,numSteps do
 			newlp = self:leapfrog(&pos, &grad)
-			-- C.printf("pos: %g, grad: %g, lp: %g\n", pos(0), grad(0), newlp)
+			[util.optionally(verbosity > 1, function() return quote
+				C.printf("lp: %g\n", newlp)
+			end end)]
 		end
-		-- C.printf("--- TRAJECTORY END ---\n")
-
-		-- C.printf("stepSize: %g                    \n", self.stepSize)
-		-- C.printf("finalLP: %g              \n", newlp)
+		[util.optionally(verbosity > 0, function() return quote
+			C.printf("--- TRAJECTORY END ---\n")
+			C.printf("finalLP: %g              \n", newlp)
+		end end)]
 
 		-- If we're doing PMR, we need to negate momentum
 		[util.optionally(doingPMR, function() return quote
@@ -421,7 +427,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		var H_new = (self:kineticEnergy() + newlp)/currTrace.temperature 
 
 		var dH = H_new - H
-		-- C.printf("exp(dH): %g\n", ad.math.exp(dH))
+		[util.optionally(verbosity > 0, function() return quote
+			C.printf("H: %g, H_new: %g, dH: %g, exp(dH): %g\n", H, H_new, dH, ad.math.exp(dH))
+		end end)]
 
 		-- Update step size, if we're doing adaptive step sizes
 		if stepSizeAdapt and self.adapter.adapting then
@@ -448,9 +456,13 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			[util.optionally(not usePrimalLP, function() return quote
 				[BaseTraceD.setLogprobFrom(ad.num)](currTrace, self.adTrace)
 			end end)]
-			-- C.printf("ACCEPT                   \n")
+			[util.optionally(verbosity > 0, function() return quote
+				C.printf("ACCEPT\n")
+			end end )]
 		else
-			-- C.printf("REJECT                   \n")
+			[util.optionally(verbosity > 0, function() return quote
+				C.printf("REJECT\n")
+			end end )]
 		end
 
 		-- If we're doing PMR, we negate momentum again (so we get momentum
@@ -486,7 +498,7 @@ local HMC = util.fnWithDefaultArgs(function(...)
 end,
 {{"stepSize", -1.0}, {"numSteps", 1}, {"usePrimalLP", false},
  {"stepSizeAdapt", true}, {"adaptationRate", 0.05},
- {"pmrAlpha", 0.0}})
+ {"pmrAlpha", 0.0}, {"verbosity", 0}})
 
 
 
