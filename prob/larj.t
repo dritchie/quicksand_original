@@ -104,12 +104,6 @@ local InterpolationRandVar = templatize(function(ProbType)
 	end
 	inheritance.virtual(InterpolationRandVarT, "setRealComponents")
 
-	terra InterpolationRandVarT:rescore() : {}
-		self.rv1:rescore()
-		self.rv2:rescore()
-	end
-	inheritance.virtual(InterpolationRandVarT, "rescore")
-
 	m.addConstructors(InterpolationRandVarT)
 	return InterpolationRandVarT
 end)

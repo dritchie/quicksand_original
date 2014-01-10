@@ -280,9 +280,9 @@ local function mcmc(computation, kernelgen, params)
 	local terra chain()
 		var kernel = [kernelgen()]
 		var samps = [Vector(Sample(RetValType))].stackAlloc()
-		C.printf("initializing trace...\n")
+		-- C.printf("initializing trace...\n")
 		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
-		C.printf("done initializing trace\n")
+		-- C.printf("done initializing trace\n")
 		var t0 = 0.0
 		for i=0,iters do
 			if verbose then

@@ -105,11 +105,6 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		for i=0,self.adNonstructuralVars.size do
 			self.adNonstructuralVars:get(i):setRealComponents(&self.indepVarNums, &index)
 		end
-		-- Also need to force logprob updates for all the structural vars, since their
-		--    logprob values will be invalidated by the previous calls to grad()
-		for i=0,self.adStructuralVars.size do
-			self.adStructuralVars(i):rescore()
-		end
 		[trace.traceUpdate({structureChange=false})](self.adTrace)
 		var lp = self.adTrace.logprob:val()
 		self.adTrace.logprob:grad(&self.indepVarNums, grad)
@@ -182,7 +177,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 	-- Search for a decent step size
 	-- (Code adapted from Stan)
 	terra HMCKernelT:searchForStepSize()
-		C.printf("searching for HMC step size...\n")
+		-- C.printf("searching for HMC step size...\n")
 		self.stepSize = 1.0
 		var pos = m.copy(self.positions)
 		var grad = m.copy(self.gradient)
@@ -200,7 +195,6 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			grad = m.copy(self.gradient)
 			self:sampleMomenta()
 			lp = self:leapfrog(&pos, &grad)
-			-- C.printf("%g, %g\n", pos(0), grad(0))
 			H = lp - lastlp
 			-- If our initial step improved the posterior by more than 0.5, then
 			--    keep doubling step size until the initial step improves by as
@@ -225,7 +219,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 				util.fatalError("Bad (discontinuous?) posterior - HMC step size search collapsed to zero.\n")
 			end
 		end
-		C.printf("done searching for HMC step size\n")
+		-- C.printf("done searching for HMC step size\n")
 		m.destruct(pos)
 		m.destruct(grad)
 	end
@@ -345,9 +339,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		self:initInverseMasses(currTrace)
 
 		-- Initialize the gradient
-		C.printf("initializing logprob and gradient for HMC kernel...\n")
+		-- C.printf("initializing logprob and gradient for HMC kernel...\n")
 		self:logProbAndGrad(&self.positions, &self.gradient)
-		C.printf("done initializing logprob and gradient for HMC kernel\n")
+		-- C.printf("done initializing logprob and gradient for HMC kernel\n")
 
 		-- If the stepSize wasn't specified, try to find a decent one.
 		if self.stepSize <= 0.0 then

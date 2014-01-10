@@ -160,7 +160,7 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	local hasUpperBound = erph.opts.hasUpperBound(OpstructType)
 
 	-- Initialize the class we're building
-	local struct RandVarFromFunctionsT {}
+	local struct RandVarFromFunctionsT { hasChanges: bool }
 	RandVarFromFunctionsT.ValType = ValType
 	local ParentClass = RandVarWithVal(ProbType, ValType)
 	inheritance.dynamicExtend(ParentClass, RandVarFromFunctionsT)
@@ -210,7 +210,6 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 				var logit = logistic(x)
 				if x > [-math.huge] and logit == 0.0 then logit = 1e-15 end
 				if x < [math.huge] and logit == 1.0 then logit = [1.0 - 1e-15] end
-				C.printf("bounds: [%f, %f]                \n", ad.val(self.lowerBound), ad.val(self.upperBound))
 			in
 				self.lowerBound + (self.upperBound - self.lowerBound) * logit
 			end
@@ -237,12 +236,7 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 
 	-- Get and set the variable's value, respecting these transforms
 	RandVarFromFunctionsT.methods.getValue = macro(function(self)
-		-- return `self:forwardTransform(self.value)
-		return quote
-			C.printf("getValue\n")
-		in
-			self:forwardTransform(self.value)
-		end
+		return `self:forwardTransform(self.value)
 	end)
 	RandVarFromFunctionsT.methods.setValue = macro(function(self, val)
 		return quote
@@ -365,7 +359,7 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	terra RandVarFromFunctionsT:checkForUpdates(options: OpstructType, [paramsyms])
 		-- We must always rescore if we're using AD, because the dual nums get wiped
 		--    out after every run.
-		var hasChanges = [scalarType == ad.num]
+		var hasChanges = self.hasChanges or [scalarType == ad.num]
 		var mass = [erph.opts.getMass(`options, OpstructType)]
 		-- Check for changes in parameters
 		[checkParams(self, hasChanges)]
@@ -405,8 +399,8 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 
 	-- Update log probability
 	terra RandVarFromFunctionsT:updateLogprob() : {}
-		C.printf("updateLogprob\n")
 		self.logprob = self:priorAdjustment(self.value) + logprobfn(self:forwardTransform(self.value), [genParamFieldsExpList(self)])
+		self.hasChanges = false
 	end
 
 	-- Propose new value
@@ -422,22 +416,18 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	terra RandVarFromFunctionsT:setRawValue(valptr: &opaque) : {}
 		m.destruct(self.value)
 		self.value = m.copy(@([&ValType](valptr)))
-		self:updateLogprob()
+		self.hasChanges = true
 	end
 	inheritance.virtual(RandVarFromFunctionsT, "setRawValue")
 
-	-- Setting real components may require us to update the logprob.
+	-- Setting real components may require us to (eventually) update the logprob.
 	terra RandVarFromFunctionsT:setRealComponents(comps: &Vector(ProbType), index: &uint) : {}
 		ParentClass.setReals(self, comps, index)
-		[ParentClass.HasRealComponents and (quote self:updateLogprob() end) or (quote end)]
+		[util.optionally(ParentClass.HasRealComponents, function() return quote
+			self.hasChanges = true
+		end end)]
 	end
 	inheritance.virtual(RandVarFromFunctionsT, "setRealComponents")
-
-	-- Rescore the ERP
-	terra RandVarFromFunctionsT:rescore() : {}
-		self:updateLogprob()
-	end
-	inheritance.virtual(RandVarFromFunctionsT, "rescore")
 
 	m.addConstructors(RandVarFromFunctionsT)
 	return RandVarFromFunctionsT
