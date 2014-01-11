@@ -223,11 +223,29 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		end)
 	elseif hasLowerBound then
 		forwardTransform = macro(function(self, x) return `ad.math.exp(x) + self.lowerBound end)
-		inverseTransform = macro(function(self, y) return `ad.math.log(y - self.lowerBound) end)
+		inverseTransform = macro(function(self, y)
+			return quote
+				var z = ad.math.fmax(y, self.lowerBound + 1e-15)
+				var x = ad.math.log(z - self.lowerBound)
+				-- C.printf("y: %g, z: %g, x: %g, lowerBound: %g\n",	
+				-- 	ad.val(y), ad.val(z), ad.val(x), ad.val(self.lowerBound))
+			in
+				x
+			end
+		end)
 		priorAdjustment = macro(function(self, x) return x end)
 	elseif hasUpperBound then
 		forwardTransform = macro(function(self, x) return `self.upperBound - ad.math.exp(x) end)
-		inverseTransform = macro(function(self, y) return `ad.math.log(self.upperBound - y) end)
+		inverseTransform = macro(function(self, y)
+			return quote
+				var z = ad.math.fmin(y, self.upperBound - 1e-15)
+				var x = ad.math.log(self.upperBound - z)
+				-- C.printf("y: %g, z: %g, x: %g, upperBound: %g\n",
+				-- 	ad.val(y), ad.val(z), ad.val(x), ad.val(self.upperBound))
+			in
+				x
+			end
+		end)
 		priorAdjustment = macro(function(self, x) return x end)
 	end
 	RandVarFromFunctionsT.methods.forwardTransform = forwardTransform
