@@ -215,7 +215,12 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 			end
 		end)
 		inverseTransform = macro(function(self, y)
-			return `invlogistic((y - self.lowerBound) / (self.upperBound - self.lowerBound))
+			return quote
+				var z = ad.math.fmax(ad.math.fmin(y, self.upperBound - 1e-15), self.lowerBound + 1e-15)
+				var x = invlogistic((z - self.lowerBound) / (self.upperBound - self.lowerBound))
+			in
+				x
+			end
 		end)
 		priorAdjustment = macro(function(self, x)
 			-- Simplification of ad.math.log((self.upperBound - self.lowerBound) * logistic(x) * (1 - logistic(x)))
