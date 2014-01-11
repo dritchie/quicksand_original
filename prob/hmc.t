@@ -175,7 +175,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 	-- Search for a decent step size
 	-- (Code adapted from Stan)
 	terra HMCKernelT:searchForStepSize()
-		-- C.printf("searching for HMC step size...\n")
+		[util.optionally(verbosity > 2, function() return quote
+			C.printf("Searching for HMC step size...\n")
+		end end)]
 		self.stepSize = 1.0
 		var pos = m.copy(self.positions)
 		var grad = m.copy(self.gradient)
@@ -186,8 +188,11 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		var direction = -1
 		if H > ad.math.log(0.5) then direction = 1 end
 		while true do
-			-- C.printf("%g\n", self.stepSize)
-			-- C.printf("%g\n", lp)
+			[util.optionally(verbosity > 2, function() return quote
+				C.printf("-------\n")
+				C.printf("stepSize: %g\n", self.stepSize)
+				C.printf("lp: %g\n", lp)
+			end end)]
 			m.destruct(pos)
 			m.destruct(grad)
 			pos = m.copy(self.positions)
@@ -206,8 +211,14 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			elseif (direction == -1) and (H >= ad.math.log(0.5)) then
 				break
 			elseif direction == 1 then
+				[util.optionally(verbosity > 3, function() return quote
+					C.printf("doubling...\n")
+				end end)]
 				self.stepSize = self.stepSize * 2.0
 			else
+				[util.optionally(verbosity > 3, function() return quote
+					C.printf("halving...\n")
+				end end)]
 				self.stepSize = self.stepSize * 0.5
 			end
 			-- Check for divergence to infinity or collapse to zero.
@@ -218,7 +229,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 				util.fatalError("Bad (discontinuous?) posterior - HMC step size search collapsed to zero.\n")
 			end
 		end
-		-- C.printf("done searching for HMC step size\n")
+		[util.optionally(verbosity > 2, function() return quote
+			C.printf("Done searching for HMC step size\n")
+		end end)]
 		m.destruct(pos)
 		m.destruct(grad)
 	end
