@@ -114,6 +114,79 @@ end,
 
 
 
+-- Proposals to non-structural continuous random variables using Gaussian drift
+local GaussianDriftKernel = templatize(function(bandwidth)
+
+	local struct GaussianDriftKernelT
+	{
+		proposalsMade: uint,
+		proposalsAccepted: uint
+	}
+	inheritance.dynamicExtend(MCMCKernel, GaussianDriftKernelT)
+
+	terra GaussianDriftKernelT:__construct()
+		self.proposalsMade = 0
+		self.proposalsAccepted = 0
+	end
+
+	terra GaussianDriftKernelT:__destruct() : {} end
+	inheritance.virtual(GaussianDriftKernelT, "__destruct")
+
+	terra GaussianDriftKernelT:next(currTrace: &BaseTraceD) : &BaseTraceD
+		self.proposalsMade = self.proposalsMade + 1
+		var nextTrace = currTrace:deepcopy()
+		-- Grab the real components of all nonstructural variables
+		var freevars = nextTrace:freeVars(false, true)
+		var realcomps = [Vector(double)].stackAlloc()
+		for i=0,freevars.size do
+			freevars(i):getRealComponents(&realcomps)
+		end
+		-- Choose a component at random, make a gaussian perturbation to it
+		var i = rand.uniformRandomInt(0, realcomps.size)
+		realcomps(i) = [rand.gaussian_sample(double)](realcomps(i), bandwidth)
+		-- Re-run trace with new value, make accept/reject decision
+		var index = 0U
+		for i=0,freevars.size do
+			freevars(i):setRealComponents(&realcomps, &index)
+		end
+		[trace.traceUpdate({structureChange=false})](nextTrace)
+		var acceptThresh = (nextTrace.logprob - currTrace.logprob)/currTrace.temperature
+		if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
+			self.proposalsAccepted = self.proposalsAccepted + 1
+			m.delete(currTrace)
+		else
+			m.delete(nextTrace)
+			nextTrace = currTrace
+		end
+		m.destruct(freevars)
+		return nextTrace
+	end
+	inheritance.virtual(GaussianDriftKernelT, "next")
+
+	terra GaussianDriftKernelT:name() : rawstring return [GaussianDriftKernelT.name] end
+	inheritance.virtual(GaussianDriftKernelT, "name")
+
+	terra GaussianDriftKernelT:stats() : {}
+		C.printf("Acceptance ratio: %g (%u/%u)\n",
+			[double](self.proposalsAccepted)/self.proposalsMade,
+			self.proposalsAccepted,
+			self.proposalsMade)
+	end
+	inheritance.virtual(GaussianDriftKernelT, "stats")
+
+	m.addConstructors(GaussianDriftKernelT)
+	return GaussianDriftKernelT
+
+end)
+
+-- Convenience method for making GaussianDriftKernels
+local GaussianDrift = util.fnWithDefaultArgs(function(...)
+	local GDType = GaussianDriftKernel(...)
+	return function() return `GDType.heapAlloc() end
+end,
+{{"bandwidth", 1.0}})
+
+
 
 
 
@@ -369,6 +442,7 @@ return
 	globals = {
 		RandomWalk = RandomWalk,
 		-- ADRandomWalk = ADRandomWalk,
+		GaussianDrift = GaussianDrift,
 		Schedule = Schedule,
 		forwardSample = forwardSample,
 		mcmc = mcmc,
