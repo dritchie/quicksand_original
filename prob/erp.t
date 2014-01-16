@@ -270,23 +270,33 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 
 	-- Constructor
 	local paramsyms = {}
+	local hasInitialVal = erph.opts.hasInitialVal(OpstructType)
 	for i,t in ipairs(paramtypes) do table.insert(paramsyms, symbol(t)) end
 	terra RandVarFromFunctionsT:__construct(depth: uint, options: OpstructType, [paramsyms])
 		var isstruct = [erph.opts.getIsStruct(`options, OpstructType)]
 		var mass = [erph.opts.getMass(`options, OpstructType)]
 		var iscond = hasCondVal
 		var val : ValType
-		[hasCondVal and
-			quote val = [erph.opts.getCondVal(`options, OpstructType)] end
-		or
-			quote val = sample([paramsyms]) end
-		]
+		-- Set the initial value of this variable
+		-- It's either constrained to be some value, or has a specified initial value, or
+		--    we sample from the prior.
+		[util.optionally(hasCondVal, function() return quote
+			val = [erph.opts.getCondVal(`options, OpstructType)]
+		end end)]
+		[util.optionally(not hasCondVal and hasInitialVal, function() return quote
+			val = [erph.opts.getInitialVal(`options, OpstructType)]
+		end end)]
+		[util.optionally(not hasCondVal and (not hasInitialVal), function() return quote
+			val = sample([paramsyms])
+		end end)]
+		-- Record bounds, if they exist
 		[util.optionally(hasLowerBound, function() return quote
 			self.lowerBound = [erph.opts.getLowerBound(`options, OpstructType)]
 		end end)]
 		[util.optionally(hasUpperBound, function() return quote
 			self.upperBound = [erph.opts.getUpperBound(`options, OpstructType)]
 		end end)]
+		-- Finish up
 		val = self:inverseTransform(val)
 		ParentClass.__construct(self, val, isstruct, iscond, depth, mass)
 		[genParamFieldsExpList(self)] = [wrapExpListWithCopies(paramsyms)]

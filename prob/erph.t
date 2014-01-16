@@ -197,7 +197,12 @@ end
 function opts.getUpperBound(opstruct, ostyp)
 	return opts.getErpOption(opstruct, ostyp, "upperBound", nil)
 end
-
+function opts.hasInitialVal(ostyp)
+	return opts.hasErpOption(ostyp, "initialVal")
+end
+function opts.getInitialVal(opstruct, ostyp)
+	return opts.getErpOption(opstruct, ostyp, "initialVal", nil)
+end
 
 
 return
