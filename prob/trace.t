@@ -56,19 +56,22 @@ local pfn = spec.specializable(function(...)
 		local ismethod = opts and opts.ismethod
 		local data = { definition = fn }
 		local ret = macro(function(...)
-			local args = {}
-			for i=1,select("#",...) do table.insert(args, (select(i,...))) end
-			if ismethod then args[1] = `&[args[1]] end
+			local args = {...}
+			local argtypes = {}
+			for _,a in ipairs(args) do table.insert(argtypes, a:gettype()) end
+			-- If the function being wrapped is a method, and the first argument is not already
+			--    a pointer type, convert it to a pointer (this is the 'self' argument)
+			if ismethod and (not argtypes[1]:ispointertostruct()) then
+				args[1] = `&[args[1]]
+				argtypes[1] = &argtypes[1]
+			end
 			-- If we're compiling a specialization with no structure change, or if we're running
 			--    the code outside of an inference engine, then don't do any address tracking
 			if not doingInference or not structureChange then
 				return `[data.definition]([args])
 			end
-			-- Every call gets a unique id
-			local myid = nextid
-			nextid = nextid + 1
 			local argintermediates = {}
-			for _,a in ipairs(args) do table.insert(argintermediates, symbol(a:gettype())) end
+			for _,t in ipairs(argtypes) do table.insert(argintermediates, symbol(t)) end
 			-- Does the function have an explicitly annotated return type?
 			local success, typ = data.definition:peektype()
 			-- If not, attempt to compile to determine the type
@@ -78,6 +81,9 @@ local pfn = spec.specializable(function(...)
 			if not typ then
 				error("Recursive probabilistic functions must have explicitly annotated return types.")
 			else
+				-- Every call gets a unique id
+				local myid = nextid
+				nextid = nextid + 1
 				-- Generate code!
 				isValidProbFn(data.definition)
 				local numrets = #typ.returns
@@ -116,6 +122,15 @@ local pfn = spec.specializable(function(...)
 	end
 end)
 
+local pmethod = spec.specializable(function(...)
+	local paramTable = spec.paramListToTable(...)
+	local pfnspec = pfn(paramTable)
+	return function(fn, opts)
+		opts = opts or {}
+		opts.ismethod = true
+		return pfnspec(fn, opts)
+	end
+end)
 
 
 
@@ -649,6 +664,7 @@ return
 	lookupVariableValue = lookupVariableValue,
 	globals = {
 		pfn = pfn,
+		pmethod = pmethod,
 		factor = factor,
 		condition = condition
 	}
