@@ -394,17 +394,13 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		[util.optionally(doingPMR, function() return `self:sampleMomentaPMR() end)]
 		[util.optionally(not doingPMR, function() return `self:sampleMomenta() end)]
 
-		-- -- NEW VERSION OF TEMPERING: Momentum scaling
-		-- for i=0,self.momenta.size do
-		-- 	self.momenta(i) = currTrace.temperature*self.momenta(i)
-		-- end
-
 		-- Initial Hamiltonian
 		var H = (self:kineticEnergy() + currTrace.logprob)/currTrace.temperature 
 
 		-- Do leapfrog steps
 		[util.optionally(verbosity > 0, function() return quote
 			C.printf("--- TRAJECTORY START ---\n")
+			C.printf("dimension: %u\n", self.positions.size)
 			C.printf("stepSize: %g\n", self.stepSize)
 			C.printf("initialLP: %g\n", currTrace.logprob)
 			C.printf("H: %g\n", H)
