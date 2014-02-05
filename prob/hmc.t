@@ -23,7 +23,10 @@ local C = terralib.includecstring [[
 -- Only makes proposals to non-structural variables
 local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 									  stepSizeAdapt, adaptationRate,
+									  temperingMult,
 									  pmrAlpha, verbosity)
+	local doTempering = temperingMult ~= 1.0
+	local sqrtTemperingMult = math.sqrt(temperingMult)
 	local doingPMR = pmrAlpha > 0.0
 	local targetAcceptRate = (numSteps == 1) and 0.57 or 0.65
 	local struct HMCKernelT
@@ -381,6 +384,37 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		m.destruct(currVars)
 	end
 
+	-- Simulate Hamiltonian dynamics for some number of steps and return the
+	-- final logprob
+	terra HMCKernelT:simulateTrajectory(pos: &Vector(double), grad: &Vector(double))
+		var newlp : double
+		for i=1,numSteps+1 do
+			-- Tempering pre-step momentum adjustment
+			[util.optionally(doTempering, function() return quote
+				if 2*(i-1) < numSteps then
+					for j=0,self.momenta.size do self.momenta(j) = self.momenta(j) * sqrtTemperingMult end
+				else
+					for j=0,self.momenta.size do self.momenta(j) = self.momenta(j) / sqrtTemperingMult end
+				end
+			end end)]
+			-- Take leapfrog step
+			newlp = self:leapfrog(pos, grad)
+			-- Tempering post-step momentum adjustment
+			[util.optionally(doTempering, function() return quote
+				if 2*i > numSteps then
+					for j=0,self.momenta.size do self.momenta(j) = self.momenta(j) / sqrtTemperingMult end
+				else
+					for j=0,self.momenta.size do self.momenta(j) = self.momenta(j) * sqrtTemperingMult end
+				end
+			end end)]
+			-- Diagnostic output
+			[util.optionally(verbosity > 1, function() return quote
+				C.printf("lp: %g\n", newlp)
+			end end)]
+		end
+		return newlp
+	end
+
 	terra HMCKernelT:next(currTrace: &BaseTraceD) : &BaseTraceD
 		self.proposalsMade = self.proposalsMade + 1
 		if currTrace ~= self.lastTrace then
@@ -407,13 +441,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end end)]
 		var pos = m.copy(self.positions)
 		var grad = m.copy(self.gradient)
-		var newlp : double
-		for i=0,numSteps do
-			newlp = self:leapfrog(&pos, &grad)
-			[util.optionally(verbosity > 1, function() return quote
-				C.printf("lp: %g\n", newlp)
-			end end)]
-		end
+		var newlp = self:simulateTrajectory(&pos, &grad)
 		[util.optionally(verbosity > 0, function() return quote
 			C.printf("--- TRAJECTORY END ---\n")
 			C.printf("finalLP: %g              \n", newlp)
@@ -469,6 +497,8 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 				C.printf("ACCEPT\n")
 			end end )]
 		else
+			m.destruct(pos)
+			m.destruct(grad)
 			[util.optionally(verbosity > 0, function() return quote
 				C.printf("REJECT\n")
 			end end )]
@@ -507,6 +537,7 @@ local HMC = util.fnWithDefaultArgs(function(...)
 end,
 {{"stepSize", -1.0}, {"numSteps", 1}, {"usePrimalLP", false},
  {"stepSizeAdapt", true}, {"adaptationRate", 0.05},
+ {"temperingMult", 1.0},
  {"pmrAlpha", 0.0}, {"verbosity", 0}})
 
 
