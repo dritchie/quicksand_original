@@ -64,7 +64,7 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 	--    treated as having no real components.
 	RandVarWithValT.HasRealComponents = (ValType == double or ValType == ad.num or
 							   ValType == Vector(double) or ValType == Vector(ad.num) or
-							   ValType:getmethod("setRealComponents"))
+							   ValType:getmethod("setRealComponents") ~= nil)
 	local function genGetReals(self, comps)
 		if ValType == double or ValType == ad.num then
 			return quote
@@ -145,12 +145,9 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	local logprobfn = logprobTemplate(scalarType)
 	local propose = proposeTemplate(scalarType)
 
-	-- Can't handle functions with multiple return values
-	assert(#sample:getdefinitions()[1]:gettype().returns == 1)
-
 	-- All overloads of the sampling function must have the same return type
-	local ValType = sample:getdefinitions()[1]:gettype().returns[1]
-	for i=2,#sample:getdefinitions() do assert(sample:getdefinitions()[i]:gettype().returns[1] == ValType) end
+	local ValType = sample:getdefinitions()[1]:gettype().returntype
+	for i=2,#sample:getdefinitions() do assert(sample:getdefinitions()[i]:gettype().returntype == ValType) end
 
 	local ProbType = scalarType
 
@@ -567,8 +564,6 @@ local function makeERP(sample, logprobfn, propose)
 		local computation = spec.paramFromTable("computation", specParams)
 		local specSample = sample(V)
 		local numParams = #specSample:gettype().parameters
-		-- All overloads must have same return type, so this is fine.
-		local rettype = specSample:gettype().returns[1]
 		return macro(function(...)
 			local params = {}
 			for i=1,numParams do table.insert(params, (select(i,...))) end

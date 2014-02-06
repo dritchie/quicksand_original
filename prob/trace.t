@@ -40,12 +40,12 @@ end
 --    recursive functions.
 local function isValidProbFn(fn)
 	-- Prerequisites: fn must be a terra function, and if it is overloaded,
-	-- all overloads must have the same number of return types
+	-- all overloads must have the same return type
 	local s, t = fn:getdefinitions()[1]:peektype()
-	local numrets = #t.returns
+	local rettype = t.returntype
 	for i=2,#fn:getdefinitions() do
 		s, t = fn:getdefinitions()[i]:peektype()
-		assert(#t.returns == numrets)
+		assert(#t.returntype == rettype)
 	end
 end
 local nextid = 0
@@ -86,25 +86,13 @@ local pfn = spec.specializable(function(...)
 				nextid = nextid + 1
 				-- Generate code!
 				isValidProbFn(data.definition)
-				local numrets = #typ.returns
-				if numrets == 0 then
-					return quote
-						var [argintermediates] = [args]
-						callsiteStack:push(myid)
-						[data.definition]([argintermediates])
-						callsiteStack:pop()
-					end
-				else
-					local results = {}
-					for i=1,numrets do table.insert(results, symbol()) end
-					return quote
-						var [argintermediates] = [args]
-						callsiteStack:push(myid)
-						var [results] = [data.definition]([argintermediates])
-						callsiteStack:pop()
-					in
-						[results]
-					end
+				return quote
+					var [argintermediates] = [args]
+					callsiteStack:push(myid)
+					var result = [data.definition]([argintermediates])
+					callsiteStack:pop()
+				in
+					result
 				end
 			end
 		end)
@@ -272,7 +260,7 @@ GlobalTrace = templatize(function(ProbType)
 			var it = other.vars:iterator()
 			[util.foreach(it, quote
 				var k, v = it:keyvalPointer()
-				var vlistp = (self.vars:getOrCreatePointer(@k))
+				var vlistp, didGet = self.vars:getOrCreatePointer(@k)
 				for i=0,v.size do
 					var oldvar = v:get(i)
 					var newvar = [RVarP.deepcopy(ProbType)](oldvar)
@@ -308,7 +296,7 @@ GlobalTrace = templatize(function(ProbType)
 		@lnump = @lnump + 1
 		-- Grab all variables corresponding to this lexpos
 		-- (getOrCreate means we will get an empty vector instead of nil)
-		var vlistp = (self.vars:getOrCreatePointer(callsiteStack))
+		var vlistp, didGet = (self.vars:getOrCreatePointer(callsiteStack))
 		self.lastVarList = vlistp
 		-- Return nil if no variables from this lexpos match the current loop num
 		if vlistp.size <= lnum then
@@ -399,15 +387,9 @@ RandExecTrace = templatize(function(ProbType, computation)
 	local success, CompType = comp:peektype()
 	if not success then CompType = comp:gettype() end
 
-	-- For the time being at least, we restrict inference to
-	-- computations with a single return value
-	if #CompType.returns ~= 1 then
-		error("Can only do inference on computations with a single return value.")
-	end
-
 	local struct Trace
 	{
-		returnValue: CompType.returns[1],
+		returnValue: CompType.returntype,
 		hasReturnValue: bool
 	}
 	inheritance.dynamicExtend(ParentClass, Trace)

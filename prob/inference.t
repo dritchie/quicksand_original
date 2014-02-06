@@ -278,9 +278,9 @@ local SchedulingKernel = templatize(function(innerKernelGen, schedule)
 end)
 
 local function Schedule(innerKernelGen, schedule)
-	return macro(function()
+	return function()
 		return `[SchedulingKernel(innerKernelGen, schedule)].heapAlloc()
-	end)
+	end
 end
 
 
@@ -349,7 +349,7 @@ local function mcmc(computation, kernelgen, params)
 	local burnin = params.burnin or 0
 	local comp = computation()
 	local CompType = comp:getdefinitions()[1]:gettype()
-	local RetValType = CompType.returns[1]
+	local RetValType = CompType.returntype
 	local terra chain()
 		var kernel = [kernelgen()]
 		var samps = [Vector(Sample(RetValType))].stackAlloc()

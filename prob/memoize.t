@@ -35,7 +35,7 @@ local MultiTypeMemberStruct = templatize(function(...)
 	-- Setup struct and its (unnamed) entries
 	local struct aggregate {}
 	local numtypes = select("#",...)
-	for i=1,numtypes do aggregate.entries:insert((select(i,...))) end
+	for i=1,numtypes do aggregate.entries:insert({field=string.format("_%d", i-1), type=(select(i,...))}) end
 	-- Some helpers
 	local function elems(array, len)
 		local exps = {}
@@ -90,10 +90,10 @@ local MemFn = templatize(function(fn)
 	-- Some helpers
 	local function aggregates(fndef)
 		local t = fndef:gettype()
-		return MultiTypeMemberStruct(unpack(t.parameters)), MultiTypeMemberStruct(unpack(t.returns))
+		return MultiTypeMemberStruct(unpack(t.parameters)), MultiTypeMemberStruct(t.returntype)
 	end
 
-	local struct MemFn {}
+	local struct MemFnT {}
 	-- One hash map per definition
 	-- Record which hash map member was created from which parameter types
 	local numdefs = #fn:getdefinitions()
@@ -103,20 +103,20 @@ local MemFn = templatize(function(fn)
 		local ParamRec, ReturnRec = aggregates(fndef)
 		paramRecToEntryID[ParamRec] = i
 		local MapType = HashMap(ParamRec, ReturnRec)
-		MemFn.entries:insert(MapType)
+		MemFnT.entries:insert({field=string.format("_%d", i-1), type=MapType})
 	end
 	-- Methods
-	terra MemFn:__construct()
+	terra MemFnT:__construct()
 		[initwrap(fields(self, numdefs))]
 	end
-	terra MemFn:__copy(other: &MemFn)
+	terra MemFnT:__copy(other: &MemFnT)
 		[fields(self, numdefs)] = [copywrap(fields(other, numdefs))]
 	end
-	terra MemFn:__destruct()
+	terra MemFnT:__destruct()
 		[destructwrap(fields(self, numdefs))]
 	end
 	-- Invocation
-	MemFn.metamethods.__apply = macro(function(self, ...)
+	MemFnT.metamethods.__apply = macro(function(self, ...)
 		local args = {}
 		for i=1,select("#",...) do table.insert(args, (select(i,...))) end
 		local argtypes = {}
@@ -124,7 +124,6 @@ local MemFn = templatize(function(fn)
 		local ParamRec = MultiTypeMemberStruct(unpack(argtypes))
 		local whichDef = paramRecToEntryID[ParamRec]
 		if not whichDef then error("No definition matching arguments to memoized function.") end
-		local numRets = #fn:getdefinitions()[whichDef]:gettype().returns
 		local numParams = #fn:getdefinitions()[whichDef]:gettype().parameters
 		local hmap = `self.[string.format("_%d", whichDef-1)]
 		return quote
@@ -134,15 +133,15 @@ local MemFn = templatize(function(fn)
 			var retp, found = hmap:getOrCreatePointer(paramrec)
 			if not found then
 				-- Bypass copy b/c fn return gives us ownership
-				[fields(retp, numRets)] = fn([args])
+				[fields(retp, 1)] = fn([args])
 			end
 		in
-			[fields(retp, numRets)]
+			[fields(retp, 1)]
 		end
 	end)
 
-	m.addConstructors(MemFn)
-	return MemFn
+	m.addConstructors(MemFnT)
+	return MemFnT
 end)
 
 -- Memoize a terra function (or macro that forwards function definitions)
