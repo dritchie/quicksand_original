@@ -65,16 +65,16 @@ local InterpolationRandVar = templatize(function(ProbType)
 	end
 	util.inline(InterpolationRandVarT.methods.checkInvalidStructInterpOp)
 
-	terra InterpolationRandVarT:pointerToValue() : &opaque
+	terra InterpolationRandVarT:pointerToRawValue() : &opaque
 		self:checkInvalidStructInterpOp()
-		return self.rv1:pointerToValue()
+		return self.rv1:pointerToRawValue()
 	end
-	inheritance.virtual(InterpolationRandVarT, "pointerToValue")
+	inheritance.virtual(InterpolationRandVarT, "pointerToRawValue")
 
 	terra InterpolationRandVarT:proposeNewValue() : {ProbType, ProbType}
 		self:checkInvalidStructInterpOp()
 		var fwdPropLP, rvsPropLP = self.rv1:proposeNewValue()
-		self.rv2:setRawValue(self.rv1:pointerToValue())
+		self.rv2:setRawValue(self.rv1:pointerToRawValue())
 		self.logprob = self.rv1.logprob
 		return fwdPropLP, rvsPropLP
 	end
@@ -93,6 +93,11 @@ local InterpolationRandVar = templatize(function(ProbType)
 		self.rv1:getRealComponents(comps)
 	end
 	inheritance.virtual(InterpolationRandVarT, "getRealComponents")
+	terra InterpolationRandVarT:getRawRealComponents(comps: &Vector(ProbType)) : {}
+		self:checkInvalidStructInterpOp()
+		self.rv1:getRawRealComponents(comps)
+	end
+	inheritance.virtual(InterpolationRandVarT, "getRawRealComponents")
 
 	terra InterpolationRandVarT:setRealComponents(comps: &Vector(ProbType), index: &uint) : {}
 		self:checkInvalidStructInterpOp()
@@ -103,6 +108,15 @@ local InterpolationRandVar = templatize(function(ProbType)
 		self.logprob = self.rv1.logprob
 	end
 	inheritance.virtual(InterpolationRandVarT, "setRealComponents")
+	terra InterpolationRandVarT:setRawRealComponents(comps: &Vector(ProbType), index: &uint) : {}
+		self:checkInvalidStructInterpOp()
+		var i = @index
+		self.rv1:setRawRealComponents(comps, index)
+		@index = i
+		self.rv2:setRawRealComponents(comps, index)
+		self.logprob = self.rv1.logprob
+	end
+	inheritance.virtual(InterpolationRandVarT, "setRawRealComponents")
 
 	m.addConstructors(InterpolationRandVarT)
 	return InterpolationRandVarT

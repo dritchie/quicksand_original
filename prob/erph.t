@@ -54,11 +54,13 @@ RandVar = templatize(function(ProbType)
 
 	inheritance.purevirtual(RandVarT, "__destruct", {}->{})
 	inheritance.purevirtual(RandVarT, "valueTypeID", {}->{uint64})
-	inheritance.purevirtual(RandVarT, "pointerToValue", {}->{&opaque})
+	inheritance.purevirtual(RandVarT, "pointerToRawValue", {}->{&opaque})
 	inheritance.purevirtual(RandVarT, "setRawValue", {&opaque}->{})
 	inheritance.purevirtual(RandVarT, "proposeNewValue", {}->{ProbType,ProbType})
 	inheritance.purevirtual(RandVarT, "getRealComponents", {&Vector(ProbType)}->{})
 	inheritance.purevirtual(RandVarT, "setRealComponents", {&Vector(ProbType), &uint}->{})
+	inheritance.purevirtual(RandVarT, "getRawRealComponents", {&Vector(ProbType)}->{})
+	inheritance.purevirtual(RandVarT, "setRawRealComponents", {&Vector(ProbType), &uint}->{})
 
 	RandVarT.deepcopy = virtualTemplate(RandVarT, "deepcopy", function(P) return {}->{&RandVar(P)} end)
 
@@ -80,7 +82,7 @@ local valueIs = templatize(function(T)
 end)
 local valueAs = templatize(function(T)
 	return macro(function(randvar)
-		return `@([&T](randvar:pointerToValue()))
+		return `@([&T](randvar:pointerToRawValue()))
 	end)
 end)
 

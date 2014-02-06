@@ -106,7 +106,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end
 		var index = 0U
 		for i=0,self.adNonstructuralVars.size do
-			self.adNonstructuralVars:get(i):setRealComponents(&self.indepVarNums, &index)
+			self.adNonstructuralVars:get(i):setRawRealComponents(&self.indepVarNums, &index)
 		end
 		[trace.traceUpdate({structureChange=false})](self.adTrace)
 		var lp = self.adTrace.logprob:val()
@@ -332,7 +332,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		var currVars = currTrace:freeVars(false, true)
 		for i=0,currVars.size do
 			var prevsize = self.positions.size
-			currVars:get(i):getRealComponents(&self.positions)
+			currVars:get(i):getRawRealComponents(&self.positions)
 			self.realCompsPerVariable:push(self.positions.size - prevsize)
 		end
 		m.destruct(currVars)
@@ -385,7 +385,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		var index = 0U
 		var currVars = trace:freeVars(false, true)
 		for i=0,currVars.size do
-			currVars:get(i):setRealComponents(reals, &index)
+			currVars:get(i):setRawRealComponents(reals, &index)
 		end
 		m.destruct(currVars)
 	end

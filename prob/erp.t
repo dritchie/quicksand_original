@@ -52,10 +52,10 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 	end
 	inheritance.virtual(RandVarWithValT, "valueTypeID")
 
-	terra RandVarWithValT:pointerToValue() : &opaque
+	terra RandVarWithValT:pointerToRawValue() : &opaque
 		return [&opaque](&self.value)
 	end
-	inheritance.virtual(RandVarWithValT, "pointerToValue")
+	inheritance.virtual(RandVarWithValT, "pointerToRawValue")
 
 
 	-- By default, we understand how to get/set the real components of double, ad.num,
@@ -110,14 +110,22 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 		[genGetReals(self, comps)]
 	end
 	inheritance.virtual(RandVarWithValT, "getRealComponents")
+	terra RandVarWithValT:getRawRealComponents(comps: &Vector(ProbType)) : {}
+		[genGetReals(self, comps)]
+	end
+	inheritance.virtual(RandVarWithValT, "getRawRealComponents")
 
 	terra RandVarWithValT:setReals(comps: &Vector(ProbType), index: &uint)
 		[genSetReals(self, comps, index)]
 	end
 	terra RandVarWithValT:setRealComponents(comps: &Vector(ProbType), index: &uint) : {}
-		self:setReals(comps, index)
+		[genSetReals(self, comps, index)]
 	end
 	inheritance.virtual(RandVarWithValT, "setRealComponents")
+	terra RandVarWithValT:setRawRealComponents(comps: &Vector(ProbType), index: &uint) : {}
+		[genSetReals(self, comps, index)]
+	end
+	inheritance.virtual(RandVarWithValT, "setRawRealComponents")
 
 	return RandVarWithValT
 end)
@@ -155,6 +163,7 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	local hasCondVal = erph.opts.hasCondVal(OpstructType)
 	local hasLowerBound = erph.opts.hasLowerBound(OpstructType)
 	local hasUpperBound = erph.opts.hasUpperBound(OpstructType)
+	local isBounded = hasLowerBound or hasUpperBound
 
 	-- Initialize the class we're building
 	local struct RandVarFromFunctionsT { hasChanges: bool }
@@ -450,11 +459,35 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	end
 	inheritance.virtual(RandVarFromFunctionsT, "setRawValue")
 
-	-- Setting real components may require us to (eventually) update the logprob.
-	terra RandVarFromFunctionsT:setRealComponents(comps: &Vector(ProbType), index: &uint) : {}
+	-- We may (eventually) need to update the logprob.
+	terra RandVarFromFunctionsT:setRawRealComponents(comps: &Vector(ProbType), index: &uint) : {}
 		ParentClass.setReals(self, comps, index)
 		[util.optionally(ParentClass.HasRealComponents, function() return quote
 			self.hasChanges = true
+		end end)]
+	end
+	inheritance.virtual(RandVarFromFunctionsT, "setRawRealComponents")
+
+	-- Need to take into account variable transforms
+	terra RandVarFromFunctionsT:getRealComponents(comps: &Vector(ProbType)) : {}
+		var currsize = comps.size
+		self:getRawRealComponents(comps)
+		[util.optionally(isBounded, function() return quote
+			comps(currsize) = self:forwardTransform(comps(currsize))
+		end end)]
+	end
+	inheritance.virtual(RandVarFromFunctionsT, "getRealComponents")
+	terra RandVarFromFunctionsT:setRealComponents(comps: &Vector(ProbType), index: &uint) : {}
+		[util.optionally(isBounded, function() return quote
+			-- Here, we're using the fact that bounding only works on scalar variables (1 real component)
+			var xformedComps = [Vector(ProbType)].stackAlloc(1, self:inverseTransform(comps(@index)))
+			var tempIndex = 0U
+			self:setRawRealComponents(&xformedComps, &tempIndex)
+			m.destruct(xformedComps)
+			@index = @index + 1
+		end end)]
+		[util.optionally(not isBounded, function() return quote
+			self:setRawRealComponents(comps, index)
 		end end)]
 	end
 	inheritance.virtual(RandVarFromFunctionsT, "setRealComponents")

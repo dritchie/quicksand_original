@@ -124,6 +124,16 @@ local GaussianDriftKernel = templatize(function(bandwidth)
 	}
 	inheritance.dynamicExtend(MCMCKernel, GaussianDriftKernelT)
 
+	-- 'bandwidth' can either be a constant number or a function that maps temperature
+	--    to bandwidth
+	local getBandwidth = macro(function(currTrace)
+		if type(bandwidth) == "function" then
+			return bandwidth(`currTrace.temperature)
+		else
+			return bandwidth
+		end
+	end)
+
 	terra GaussianDriftKernelT:__construct()
 		self.proposalsMade = 0
 		self.proposalsAccepted = 0
@@ -143,7 +153,7 @@ local GaussianDriftKernel = templatize(function(bandwidth)
 		end
 		-- Choose a component at random, make a gaussian perturbation to it
 		var i = rand.uniformRandomInt(0, realcomps.size)
-		realcomps(i) = [rand.gaussian_sample(double)](realcomps(i), bandwidth)
+		realcomps(i) = [rand.gaussian_sample(double)](realcomps(i), getBandwidth(currTrace))
 		-- Re-run trace with new value, make accept/reject decision
 		var index = 0U
 		for i=0,freevars.size do
