@@ -23,10 +23,12 @@ local C = terralib.includecstring [[
 -- Only makes proposals to non-structural variables
 local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 									  stepSizeAdapt, adaptationRate,
-									  temperingMult,
+									  temperAcceptHamiltonian, temperGuideHamiltonian,
+									  temperInitialMomentum,
+									  tempTrajectoryMult,
 									  pmrAlpha, verbosity)
-	local doTempering = temperingMult ~= 1.0
-	local sqrtTemperingMult = math.sqrt(temperingMult)
+	local doTempering = tempTrajectoryMult ~= 1.0
+	local sqrtTemperingMult = math.sqrt(tempTrajectoryMult)
 	local doingPMR = pmrAlpha > 0.0
 	local targetAcceptRate = (numSteps == 1) and 0.57 or 0.65
 	local struct HMCKernelT
@@ -108,7 +110,11 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end
 		[trace.traceUpdate({structureChange=false})](self.adTrace)
 		var lp = self.adTrace.logprob:val()
-		self.adTrace.logprob:grad(&self.indepVarNums, grad)
+		var duallp = self.adTrace.logprob
+		[util.optionally(temperGuideHamiltonian, function() return quote 
+			duallp = duallp / self.adTrace.temperature
+		end end)]
+		duallp:grad(&self.indepVarNums, grad)
 		return lp
 	end
 
@@ -420,6 +426,8 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		if currTrace ~= self.lastTrace then
 			self:initWithNewTrace(currTrace)
 		end
+		-- In case temperature has been changed since we first copied the trace
+		self.adTrace.temperature = currTrace.temperature
 
 		-- Update inverse masses of position variables, if needed (LARJ)
 		self:updateInverseMasses(currTrace)
@@ -427,9 +435,17 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		-- Sample momentum variables
 		[util.optionally(doingPMR, function() return `self:sampleMomentaPMR() end)]
 		[util.optionally(not doingPMR, function() return `self:sampleMomenta() end)]
+		[util.optionally(temperInitialMomentum, function() return quote
+			for i=0,self.momenta.size do
+				self.momenta(i) = self.momenta(i) * currTrace.temperature
+			end
+		end end)]
 
 		-- Initial Hamiltonian
-		var H = (self:kineticEnergy() + currTrace.logprob)/currTrace.temperature 
+		var H = (self:kineticEnergy() + currTrace.logprob)
+		[util.optionally(temperAcceptHamiltonian, function() return quote
+			H = H / currTrace.temperature
+		end end)] 
 
 		-- Do leapfrog steps
 		[util.optionally(verbosity > 0, function() return quote
@@ -461,7 +477,10 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end end)]
 
 		-- Final Hamiltonian
-		var H_new = (self:kineticEnergy() + newlp)/currTrace.temperature 
+		var H_new = (self:kineticEnergy() + newlp)
+		[util.optionally(temperAcceptHamiltonian, function() return quote
+			H_new = H_new / currTrace.temperature
+		end end)] 
 
 		var dH = H_new - H
 		[util.optionally(verbosity > 0, function() return quote
@@ -537,7 +556,9 @@ local HMC = util.fnWithDefaultArgs(function(...)
 end,
 {{"stepSize", -1.0}, {"numSteps", 1}, {"usePrimalLP", false},
  {"stepSizeAdapt", true}, {"adaptationRate", 0.05},
- {"temperingMult", 1.0},
+ {"temperAcceptHamiltonian", false}, {"temperGuideHamiltonian", false},
+ {"temperInitialMomentum", false},
+ {"tempTrajectoryMult", 1.0},
  {"pmrAlpha", 0.0}, {"verbosity", 0}})
 
 
