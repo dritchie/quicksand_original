@@ -3,45 +3,102 @@ local Vector = terralib.require("vector")
 local Grid2D = terralib.require("grid").Grid2D
 local ad = terralib.require("ad")
 local linsolve = terralib.require("linsolve")
+local util = terralib.require("util")
+local C = terralib.includecstring [[
+#include <stdio.h>
+#include <math.h>
+#include <float.h>
+inline double dbl_epsilon() { return DBL_EPSILON; }
+]]
+
+
+-- Takes a function from dual vectors to dual vectors and wraps it in an overloaded
+--    function whose two definitions (1) go from double vectors to double vectors and
+--    (2) go from double vectors to double vectors with an added Jacobian.
+local function wrapDualFn(fn)
+	-- Full version, with Jacobian and everything
+	local terra wrappedFn(x: &Vector(double), y: &Vector(double), J: &Grid2D(double))
+		var x_dual = [Vector(ad.num)].stackAlloc(x.size, 0.0)
+		for i=0,x.size do x_dual(i) = ad.num(x(i)) end
+		var y_dual = [Vector(ad.num)].stackAlloc()
+		fn(&x_dual, &y_dual)
+		y:resize(y_dual.size)
+		for i=0,y.size do y(i) = ad.val(y_dual(i)) end
+		ad.jacobian(&y_dual, &x_dual, J)
+		m.destruct(x_dual)
+		m.destruct(y_dual)
+	end
+	-- Simple version that just executes the primal version and throws away
+	--    the tape.
+	terra wrappedFn(x: &Vector(double), y: &Vector(double))
+		var x_dual = [Vector(ad.num)].stackAlloc(x.size, 0.0)
+		for i=0,x.size do x_dual(i) = ad.num(x(i)) end
+		var y_dual = [Vector(ad.num)].stackAlloc()
+		fn(&x_dual, &y_dual)
+		y:resize(y_dual.size)
+		for i=0,y.size do y(i) = ad.val(y_dual(i)) end
+		ad.recoverMemory()
+	end
+
+	return wrappedFn
+end
+
+
+-- Return codes for Newton solvers
+local ReturnCodes = 
+{
+	ConvergedToSolution = 0,
+	ConvergedToLocalMinimum = 1,
+	ConvergedToNonSolution = 2,
+	DidNotConverge = 3
+}
 
 
 -- Generates functions that do Newton's method to try and solve non-linear systems
 --    of equations
--- f: Function describing system to be solved. Takes a vector of input nums and fills in a
---    vector of output nums
+-- F: Function describing system to be solved. Should be overloaded with two definitions:
+--    - #1: Takes a vector of input doubles and fills in a
+--    		   vector of output doubles.
+--    - #2: Takes a vector of input doubles and fills in a
+--    		   vector of output doubles as well as an output Jacobian grid.
 -- linsolver: Function that solves the linear system Ax = b, taking a grid A and a vector b and
 --    fills in a vector x. Can be a fully-determined solve or a least-squares/min-norm solve.
--- Returns true if iteration converged within allowed computation budget, otherwise returns false
-function newton(f, linsolver, convergeThresh, maxIters)
-	convergeThresh = convergeThresh or 1e-8
+function newton(F, linsolver, convergeThresh, maxIters)
+	convergeThresh = convergeThresh or 1e-10
 	maxIters = maxIters or 100
 	return terra(x: &Vector(double))
-		var xdual = [Vector(ad.num)].stackAlloc()
-		var y = [Vector(ad.num)].stackAlloc()
+		var y = [Vector(double)].stackAlloc()
 		var J = [Grid2D(double)].stackAlloc(2, 2)
 		var delta = [Vector(double)].stackAlloc()
 		var b = [Vector(double)].stackAlloc()
-		var converged = false
+		var converged = ReturnCodes.DidNotConverge
 		for iter=0,maxIters do
-			xdual:resize(x.size)
-			for i=0,x.size do xdual(i) = ad.num(x(i)) end
-			f(&xdual, &y)
-			J:resize(y.size, x.size)
-			ad.jacobian(&y, &xdual, &J)
-			-- Update rule is J(x) * (x' - x) = -f(x)
+			F(x, &y, &J)
+			-- Update rule is J(x) * (x' - x) = -F(x)
 			b:resize(y.size)
-			for i=0,y.size do b(i) = -ad.val(y(i)) end
+			for i=0,y.size do b(i) = -y(i) end
 			linsolver(&J, &b, &delta)
 			-- Update x in place
-			var deltaNorm = 0.0
 			for i=0,x.size do
-				deltaNorm = deltaNorm + delta(i)*delta(i)
 				x(i) = x(i) + delta(i)
 			end
-			-- Check if we've converged and are OK to terminate
-			-- (by checking the norm of delta)
-			if deltaNorm/x.size < convergeThresh then
-				converged = true
+			-- We've converged to a solution if the outputs are zero
+			var ynorm = 0.0
+			for i=0,y.size do
+				ynorm = ynorm + y(i)*y(i)
+			end
+			if ynorm < convergeThresh then
+				converged = ReturnCodes.ConvergedToSolution
+				break
+			end
+			-- Also terminate if the parameters aren't changing, though
+			--    this is 'bad' convergence (so don't mark it as 'converged')
+			var deltaNorm = 0.0
+			for i=0,y.size do
+				deltaNorm = deltaNorm + delta(i)*delta(i)
+			end
+			if deltaNorm < convergeThresh then
+				converged = ReturnCodes.ConvergedToNonSolution
 				break
 			end
 		end
@@ -49,97 +106,285 @@ function newton(f, linsolver, convergeThresh, maxIters)
 		m.destruct(delta)
 		m.destruct(J)
 		m.destruct(y)
-		m.destruct(xdual)
+		return converged
+	end
+end
+
+-- Like newton, but uses backtracking line search for better convergence.
+-- stepMax is a threshold on the norm of the initial Newton step. If the step is bigger than this,
+--    we first normalize it.
+-- (Implementation based on that of Numerical Recipes 3rd edition)
+function backtrackingNewton(F, linsolver, convergeThresh, maxIters, stepMax)
+	convergeThresh = convergeThresh or 1e-10
+	maxIters = maxIters or 100
+	stepMax = stepMax or 1e5
+
+	-- Compute f(x) = 1/2 * F(x) * F(x)
+	local terra halfDotProd(y: &Vector(double))
+		var sum = 0.0
+		for i=0,y.size do sum = y(i)*y(i) end
+		return 0.5*sum
+	end
+	local terra f(x: &Vector(double))
+		var y = [Vector(double)].stackAlloc()
+		F(x, &y)
+		var ret = halfDotProd(&y)
+		m.destruct(y)
+		return ret
+	end
+
+	-- Given initial point x0 and Newton step p, fill in a new point xOut along p that
+	--    decreases the value of f sufficiently.
+	-- Returns true if the search succeeded, false if the new point is too close
+	--    to the starting point.
+	local alpha = 1e-4
+	local terra lineSearch(x0: &Vector(double), f0: double, fGrad0: &Vector(double), p: &Vector(double),
+						   xOut: &Vector(double))
+		-- Vars we'll need
+		var f2 = 0.0
+		var lambda2 = 0.0
+		-- Compute slope of the step as a function of lambda at x0
+		var slope = 0.0
+		for i=0,p.size do slope = slope + fGrad0(i) * p(i) end
+		-- Have to normalize initial step?
+		var pnorm = 0.0
+		for i=0,p.size do pnorm = pnorm + p(i)*p(i) end
+		pnorm = C.sqrt(pnorm)
+		if pnorm > stepMax then for i=0,p.size do p(i) = p(i)/pnorm end end
+		-- Figure out the minimum lambda we're willing to accept
+		var test = 0.0
+		for i=0,p.size do
+			var temp = C.fabs(p(i))/C.fmax(C.fabs(x0(i)), 1.0)
+			test = C.fmax(test, temp)
+		end
+		var lambdaMin = C.dbl_epsilon() / test
+		-- C.printf("lambdaMin: %g\n", lambdaMin)
+		-- Start the backtracking loop
+		var lambda = 1.0
+		xOut:resize(x0.size)
+		while true do
+			-- C.printf("lambda: %g\n", lambda)
+			for i=0,p.size do xOut(i) = x0(i) + lambda*p(i) end
+			var f1 = f(xOut)
+			-- Terminate if we're too close to the starting point; this may signify
+			--    convergence, or we may be stuck in a local minimum of f
+			if lambda < lambdaMin then return false end
+			-- Terminate if we've sufficiently decreased f
+			if f1 <= f0 + alpha*lambda*slope then return true end
+			-- Otherwise, we need to backtrack
+			var tmpLambda = lambda
+			-- If this is the first backtrack, use a quadratic approximation
+			if lambda == 1.0 then
+				tmpLambda = -slope / (2.0 * (f1 - f0 - slope))
+			-- If this is backtrack #2 or higher, use a cubic approximation
+			else
+				var rhs1 = f1 - f0 - lambda*slope
+				var rhs2 = f2 - f0 - lambda2*slope
+				var a = (rhs1 / (lambda*lambda) - rhs2 / (lambda2*lambda2)) / (lambda - lambda2)
+				var b = (-lambda2*rhs1 / (lambda*lambda) + lambda*rhs2 / (lambda2*lambda2)) / (lambda - lambda2)
+				if a == 0.0 then
+					tmpLambda = -slope / (2.0*b)
+				else
+					var disc = b*b - 3.0*a*slope
+					if disc < 0.0 then tmpLambda = 0.5*lambda
+					elseif b <= 0 then tmpLambda = (-b + C.sqrt(disc)) / (3.0*a)
+					else tmpLambda = -slope / (b + C.sqrt(disc)) end
+				end
+				-- Guard against too big lambdas
+				tmpLambda = C.fmin(tmpLambda, 0.5*lambda)
+			end
+			lambda2 = lambda
+			f2 = f1
+			-- Guard against too small lambdas
+			lambda = C.fmax(tmpLambda, 0.1*lambda)
+		end
+	end
+
+	return terra(x: &Vector(double))
+		var xNew = [Vector(double)].stackAlloc(x.size, 0.0)
+		var fGrad0 = [Vector(double)].stackAlloc(x.size, 0.0)
+		var y = [Vector(double)].stackAlloc()
+		var J = [Grid2D(double)].stackAlloc(2, 2)
+		var p = [Vector(double)].stackAlloc()
+		var b = [Vector(double)].stackAlloc()
+		var converged = ReturnCodes.DidNotConverge
+		for iter=0,maxIters do
+			F(x, &y, &J)
+			-- Compute full Newton step: p = J(x) * (x' - x) = -F(x)
+			b:resize(y.size)
+			for i=0,y.size do b(i) = -y(i) end
+			linsolver(&J, &b, &p)
+
+			-- Backtracking line search
+			var f0 = halfDotProd(&y)
+			-- The gradient of f w.r.t x is just y*J, or a vector where element j
+			--    is the dot product of y with column j of J (i.e. J(.,j))
+			for j=0,x.size do
+				var sum = 0.0
+				for i=0,y.size do
+					sum = sum + y(i)*J(i,j)
+				end
+				fGrad0(j) = sum
+			end
+			var lineSearchSucceeded = lineSearch(x, f0, &fGrad0, &p, &xNew)
+
+			-- If y has converged to zeros, then we know we can terminate
+			var ynorm = 0.0
+			for i=0,y.size do
+				ynorm = ynorm + y(i)*y(i)
+			end
+			if ynorm < convergeThresh then
+				converged = ReturnCodes.ConvergedToSolution
+				-- C.printf("Terminating due to output convergence\n")
+				break
+			end
+
+			-- If the search failed to find a distant enough point, then we
+			--    also terminate, though this is a 'bad' convergence, since
+			--    the equations have not been satisfied.
+			-- We also check whether the termination was caused by us reaching
+			--    a local mininum of f (i.e. gradient of f all zeros)
+			if not lineSearchSucceeded then
+				var gradnorm = 0.0
+				for i=0,fGrad0.size do gradnorm = gradnorm + fGrad0(i)*fGrad0(i) end
+				gradnorm = C.sqrt(gradnorm)
+				if gradnorm < convergeThresh then
+					converged = ReturnCodes.ConvergedToLocalMinimum
+				else
+					converged = ReturnCodes.ConvergedToNonSolution
+				end
+				-- C.printf("Line search failed to find a distant enough point\n")
+				break
+			end
+
+			-- Finally, we terminate if the parameters haven't changed much.
+			-- (Again, this is a 'bad' convergence)
+			var pnorm = 0.0
+			for i=0,x.size do
+				var diff = xNew(i) - x(i)
+				pnorm = pnorm + diff*diff
+				x(i) = xNew(i)
+			end
+			if pnorm < convergeThresh then
+				converged = ReturnCodes.ConvergedToNonSolution
+				-- C.printf("Terminating due to parameter convergence\n")
+				break
+			end
+		end
+		m.destruct(b)
+		m.destruct(p)
+		m.destruct(J)
+		m.destruct(y)
+		m.destruct(fGrad0)
+		m.destruct(xNew)
 		return converged
 	end
 end
 
 
-function newtonLeastSquares(f, convergeThresh, maxIters)
-	return newton(f, linsolve.leastSquares, convergeThresh, maxIters)
+function newtonLeastSquares(F, convergeThresh, maxIters)
+	return newton(F, linsolve.leastSquares, convergeThresh, maxIters)
 end
 
-function newtonFullRank(f, convergeThresh, maxIters)
-	return newton(f, linsolve.fullRankGeneral, convergeThresh, maxIters)
+function newtonFullRank(F, convergeThresh, maxIters)
+	return newton(F, linsolve.fullRankGeneral, convergeThresh, maxIters)
+end
+
+function backtrackingNewtonLeastSquares(F, convergeThresh, maxIters)
+	return backtrackingNewton(F, linsolve.leastSquares, convergeThresh, maxIters)
+end
+
+function backtrackingNewtonFullRank(F, convergeThresh, maxIters)
+	return backtrackingNewton(F, linsolve.fullRankGeneral, convergeThresh, maxIters)
 end
 
 local _module = 
 {
+	wrapDualFn = wrapDualFn,
+	ReturnCodes = ReturnCodes,
 	newton = newton,
 	newtonLeastSquares = newtonLeastSquares,
-	newtonFullRank = newtonFullRank
+	newtonFullRank = newtonFullRank,
+	backtrackingNewton = backtrackingNewton,
+	backtrackingNewtonLeastSquares = backtrackingNewtonLeastSquares,
+	backtrackingNewtonFullRank = backtrackingNewtonFullRank
 }
 
 
 --------- TESTS ----------
 
-local util = terralib.require("util")
-local C = terralib.includecstring [[
-#include <stdio.h>
-#include <math.h>
-]]
+-- -- (x-4)*(y-5) = 0
+-- -- (Infinitely many roots with x = 4 or y = 5)
+-- local terra underdetermined_impl(input: &Vector(ad.num), output: &Vector(ad.num))
+-- 	output:resize(1)
+-- 	output(0) = (input(0) - 4.0) * (input(1) - 5.0)
+-- end
+-- local underdetermined = wrapDualFn(underdetermined_impl)
 
-local errThresh = 1e-6
-local checkVal = macro(function(actual, target)
-	return quote
-		var err = C.fabs(actual-target)
-		util.assert(err < errThresh, "Value was %g, should've been %g\n", actual, target)
-	end
-end)
-local assertAllZero = macro(function(fn, vec)
-	return quote
-		var dualvec = [Vector(ad.num)].stackAlloc()
-		for i=0,vec.size do dualvec(i) = ad.num(vec(i)) end
-		var outvec = [Vector(ad.num)].stackAlloc()
-		fn(&dualvec, &outvec)
-		for i=0,outvec.size do
-			checkVal(ad.val(outvec(i)), 0.0)
-		end
-		m.destruct(outvec)
-		m.destruct(dualvec)
-	end
-end)
+-- -- x*y - 12 = 0
+-- local terra underdetermined2_impl(input: &Vector(ad.num), output: &Vector(ad.num))
+-- 	output:resize(1)
+-- 	output(0) = input(0)*input(1) - 12.0
+-- end
+-- local underdetermined2 = wrapDualFn(underdetermined2_impl)
 
--- (x-4)*(y-5) = 0
-local terra underdetermined(input: &Vector(ad.num), output: &Vector(ad.num))
-	output:resize(1)
-	output(0) = (input(0) - 4.0) * (input(1) - 5.0)
-end
+-- -- (x-4)*(y-5) = 0
+-- -- x*y - 12 = 0
+-- -- (Roots are (4,3) and (2.4,5))
+-- local terra fullydetermined_impl(input: &Vector(ad.num), output: &Vector(ad.num))
+-- 	output:resize(2)
+-- 	output(0) = (input(0) - 4.0) * (input(1) - 5.0)
+-- 	output(1) = input(0)*input(1) - 12.0
+-- end
+-- local fullydetermined = wrapDualFn(fullydetermined_impl)
 
--- (x-4)*(y-5) = 0
--- x*y - 12 = 0
--- (Roots are (4,3) and (2.4,5))
-local terra fullydetermined(input: &Vector(ad.num), output: &Vector(ad.num))
-	output:resize(2)
-	output(0) = (input(0) - 4.0) * (input(1) - 5.0)
-	output(1) = input(0)*input(1) - 12.0
-end
+-- local assertConverged = macro(function(testnum, retcode)
+-- 	return quote
+-- 		util.assert(retcode == ReturnCodes.ConvergedToSolution, "Test %d terminated with return code %d\n", testnum, retcode)
+-- 	end
+-- end)
 
-local terra tests()
-	
-	-- Underdetermined, least-squares
-	var x = [Vector(double)].stackAlloc()
-	x:push(0.0); x:push(0.0)
-	[newtonLeastSquares(underdetermined)](&x)
-	assertAllZero(underdetermined, x)
+-- local function tests(method)
+-- 	return terra()
+-- 		var x = [Vector(double)].stackAlloc()
+-- 		var converged : int
+			
+-- 		-- 1: Underdetermined, least-squares
+-- 		x:clear()
+-- 		x:push(0.0); x:push(0.0)
+-- 		converged = [method(underdetermined, linsolve.leastSquares)](&x)
+-- 		-- C.printf("%g, %g\n", x(0), x(1))
+-- 		assertConverged(1, converged)
 
-	-- Fully-determined, least-squares
-	x:clear()
-	x:push(3.0); x:push(2.0)
-	[newtonLeastSquares(fullydetermined)](&x)
-	-- C.printf("%g, %g\n", x(0), x(1))
-	assertAllZero(fullydetermined, x)
+-- 		-- 2: Underdetermined (2), least-squares
+-- 		x:clear()
+-- 		x:push(1.0); x:push(1.0)
+-- 		converged = [method(underdetermined2, linsolve.leastSquares)](&x)
+-- 		-- C.printf("%g, %g\n", x(0), x(1))
+-- 		assertConverged(2, converged)
 
-	-- Fully-determined, full rank solver
-	x:clear()
-	x:push(3.0); x:push(2.0)
-	[newtonFullRank(fullydetermined)](&x)
-	-- C.printf("%g, %g\n", x(0), x(1))
-	assertAllZero(fullydetermined, x)
+-- 		-- 3: Fully-determined, least-squares
+-- 		x:clear()
+-- 		x:push(5.0); x:push(10.0)
+-- 		converged = [method(fullydetermined, linsolve.leastSquares)](&x)
+-- 		-- C.printf("%g, %g\n", x(0), x(1))
+-- 		assertConverged(3, converged)
 
-end
+-- 		-- 4: Fully-determined, full rank solver
+-- 		x:clear()
+-- 		x:push(5.0); x:push(10.0)
+-- 		converged = [method(fullydetermined, linsolve.fullRankGeneral)](&x)
+-- 		-- C.printf("%g, %g\n", x(0), x(1))
+-- 		assertConverged(4, converged)
 
-tests()
+-- 	end
+-- end
+
+-- print("Testing simple newton solver...")
+-- tests(newton)()
+-- print("Testing backtracking newton solver...")
+-- tests(backtrackingNewton)()
+-- print("Done")
 
 -------------------------
 
