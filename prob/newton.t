@@ -110,6 +110,9 @@ function newton(F, linsolver, convergeThresh, maxIters)
 	end
 end
 
+--
+-- TODO: This doesn't seem to work very well. Figure out what's going on(?)
+--
 -- Like newton, but uses backtracking line search for better convergence.
 -- stepMax is a threshold on the norm of the initial Newton step. If the step is bigger than this,
 --    we first normalize it.
@@ -282,6 +285,144 @@ function backtrackingNewton(F, linsolver, convergeThresh, maxIters, stepMax)
 end
 
 
+-- 
+-- TODO: ehhh, this also doesn't really work...
+--
+-- Like backtrackingNewton, but does its line search using a stupid-simple
+--    halving approach
+local function simpleBacktrackingNewton(F, linsolver, convergeThresh, maxIters)
+	convergeThresh = convergeThresh or 1e-10
+	maxIters = maxIters or 100
+
+	-- Compute f(x) = 1/2 * F(x) * F(x)
+	local terra halfDotProd(y: &Vector(double))
+		var sum = 0.0
+		for i=0,y.size do sum = y(i)*y(i) end
+		return 0.5*sum
+	end
+	local terra f(x: &Vector(double))
+		var y = [Vector(double)].stackAlloc()
+		F(x, &y)
+		var ret = halfDotProd(&y)
+		m.destruct(y)
+		return ret
+	end
+
+	-- Really dumb 'line search' that just repeatedly halves lambda until it finds a step that
+	--    decreases f (or it gives up due to a too-small step)
+	local alpha = 1e-4
+	local terra lineSearch(x0: &Vector(double), f0: double, fGrad0: &Vector(double), p: &Vector(double),
+						   xOut: &Vector(double))
+		-- Compute slope of the step as a function of lambda at x0
+		var slope = 0.0
+		for i=0,p.size do slope = slope + fGrad0(i) * p(i) end
+		-- Figure out the minimum lambda we're willing to accept
+		var test = 0.0
+		for i=0,p.size do
+			var temp = C.fabs(p(i))/C.fmax(C.fabs(x0(i)), 1.0)
+			test = C.fmax(test, temp)
+		end
+		var lambdaMin = C.dbl_epsilon() / test
+		-- Start the backtracking loop
+		var lambda = 1.0
+		xOut:resize(x0.size)
+		while true do
+			for i=0,p.size do xOut(i) = x0(i) + lambda*p(i) end
+			var f1 = f(xOut)
+			-- Terminate if we're too close to the starting point; this may signify
+			--    convergence, or we may be stuck in a local minimum of f
+			if lambda < lambdaMin then return false end
+			-- Terminate if we've sufficiently decreased f
+			-- if f1 <= f0 + alpha*lambda*slope then return true end
+			if f1 < f0 then return true end
+			-- Otherwise, we need to backtrack
+			lambda = 0.5*lambda
+		end
+	end
+
+	return terra(x: &Vector(double))
+		var xNew = [Vector(double)].stackAlloc(x.size, 0.0)
+		var fGrad0 = [Vector(double)].stackAlloc(x.size, 0.0)
+		var y = [Vector(double)].stackAlloc()
+		var J = [Grid2D(double)].stackAlloc(2, 2)
+		var p = [Vector(double)].stackAlloc()
+		var b = [Vector(double)].stackAlloc()
+		var converged = ReturnCodes.DidNotConverge
+		for iter=0,maxIters do
+			F(x, &y, &J)
+			-- Compute full Newton step: p = J(x) * (x' - x) = -F(x)
+			b:resize(y.size)
+			for i=0,y.size do b(i) = -y(i) end
+			linsolver(&J, &b, &p)
+
+			-- Backtracking line search
+			var f0 = halfDotProd(&y)
+			-- The gradient of f w.r.t x is just y*J, or a vector where element j
+			--    is the dot product of y with column j of J (i.e. J(.,j))
+			for j=0,x.size do
+				var sum = 0.0
+				for i=0,y.size do
+					sum = sum + y(i)*J(i,j)
+				end
+				fGrad0(j) = sum
+			end
+			var lineSearchSucceeded = lineSearch(x, f0, &fGrad0, &p, &xNew)
+
+			-- If y has converged to zeros, then we know we can terminate
+			var ynorm = 0.0
+			for i=0,y.size do
+				ynorm = ynorm + y(i)*y(i)
+			end
+			if ynorm < convergeThresh then
+				converged = ReturnCodes.ConvergedToSolution
+				-- C.printf("Terminating due to output convergence\n")
+				break
+			end
+
+			-- If the search failed to find a distant enough point, then we
+			--    also terminate, though this is a 'bad' convergence, since
+			--    the equations have not been satisfied.
+			-- We also check whether the termination was caused by us reaching
+			--    a local mininum of f (i.e. gradient of f all zeros)
+			if not lineSearchSucceeded then
+				var gradnorm = 0.0
+				for i=0,fGrad0.size do gradnorm = gradnorm + fGrad0(i)*fGrad0(i) end
+				gradnorm = C.sqrt(gradnorm)
+				if gradnorm < convergeThresh then
+					converged = ReturnCodes.ConvergedToLocalMinimum
+				else
+					converged = ReturnCodes.ConvergedToNonSolution
+				end
+				-- C.printf("Line search failed to find a distant enough point\n")
+				break
+			end
+
+			-- Finally, we terminate if the parameters haven't changed much.
+			-- (Again, this is a 'bad' convergence)
+			var pnorm = 0.0
+			for i=0,x.size do
+				var diff = xNew(i) - x(i)
+				pnorm = pnorm + diff*diff
+				x(i) = xNew(i)
+			end
+			if pnorm < convergeThresh then
+				converged = ReturnCodes.ConvergedToNonSolution
+				-- C.printf("Terminating due to parameter convergence\n")
+				break
+			end
+		end
+		m.destruct(b)
+		m.destruct(p)
+		m.destruct(J)
+		m.destruct(y)
+		m.destruct(fGrad0)
+		m.destruct(xNew)
+		return converged
+	end
+
+end
+
+
 function newtonLeastSquares(F, convergeThresh, maxIters)
 	return newton(F, linsolve.leastSquares, convergeThresh, maxIters)
 end
@@ -290,13 +431,13 @@ function newtonFullRank(F, convergeThresh, maxIters)
 	return newton(F, linsolve.fullRankGeneral, convergeThresh, maxIters)
 end
 
-function backtrackingNewtonLeastSquares(F, convergeThresh, maxIters)
-	return backtrackingNewton(F, linsolve.leastSquares, convergeThresh, maxIters)
-end
+-- function backtrackingNewtonLeastSquares(F, convergeThresh, maxIters)
+-- 	return backtrackingNewton(F, linsolve.leastSquares, convergeThresh, maxIters)
+-- end
 
-function backtrackingNewtonFullRank(F, convergeThresh, maxIters)
-	return backtrackingNewton(F, linsolve.fullRankGeneral, convergeThresh, maxIters)
-end
+-- function backtrackingNewtonFullRank(F, convergeThresh, maxIters)
+-- 	return backtrackingNewton(F, linsolve.fullRankGeneral, convergeThresh, maxIters)
+-- end
 
 local _module = 
 {
@@ -304,10 +445,10 @@ local _module =
 	ReturnCodes = ReturnCodes,
 	newton = newton,
 	newtonLeastSquares = newtonLeastSquares,
-	newtonFullRank = newtonFullRank,
-	backtrackingNewton = backtrackingNewton,
-	backtrackingNewtonLeastSquares = backtrackingNewtonLeastSquares,
-	backtrackingNewtonFullRank = backtrackingNewtonFullRank
+	newtonFullRank = newtonFullRank
+	-- backtrackingNewton = backtrackingNewton,
+	-- backtrackingNewtonLeastSquares = backtrackingNewtonLeastSquares,
+	-- backtrackingNewtonFullRank = backtrackingNewtonFullRank
 }
 
 
@@ -384,6 +525,8 @@ local _module =
 -- tests(newton)()
 -- print("Testing backtracking newton solver...")
 -- tests(backtrackingNewton)()
+-- print("Testing simple backtracking newton solver...")
+-- tests(simpleBacktrackingNewton)()
 -- print("Done")
 
 -------------------------
