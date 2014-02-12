@@ -347,25 +347,42 @@ local function forwardSample(computation, numsamps)
 	return `fn()
 end
 
--- Single-chain MCMC
+-- Takes a computation, initializes a trace for it, then runs any user-provided function
+--    on that trace.
+-- fn is a lua function that gets the computation as an argument and is expected to return
+--    a Terra function that takes the trace as an argument (&BaseTrace(double))
+-- Returns a no-arg terra function that does the processing
+local function processTrace(computation, fn)
+	computation = spec.ensureProbComp(computation)
+	return terra()
+		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
+		var retval = [fn(computation)](currTrace)
+		-- m.delete(currTrace)
+		return retval
+	end
+end
+
+-- Convenience methods for managing types related to samples from computations.
+local ReturnType = templatize(function(computation)
+	return computation():getdefinitions()[1]:gettype().returntype
+end)
+local SampleType = templatize(function(computation)
+	return Sample(ReturnType(computation))
+end)
+local SampleVectorType = templatize(function(computation)
+	return Vector(SampleType(computation))
+end)
+
+-- Runs an mcmc sampling loop on trace using the transition kernel specified by
+--    kernel, storing the results in samples.
 -- params are: verbose, numsamps, lag, burnin
--- returns a Vector of samples, where a sample is a
---    struct with a 'value' field and a 'logprob' field
-local function mcmc(computation, kernelgen, params)
-	computation = spec.probcomp(computation)
+local function mcmcSample(computation, params)
+	computation = spec.ensureProbComp(computation)
 	local lag = params.lag or 1
 	local iters = params.numsamps * lag
 	local verbose = params.verbose or false
 	local burnin = params.burnin or 0
-	local comp = computation()
-	local CompType = comp:getdefinitions()[1]:gettype()
-	local RetValType = CompType.returntype
-	local terra chain()
-		var kernel = [kernelgen()]
-		var samps = [Vector(Sample(RetValType))].stackAlloc()
-		-- C.printf("initializing trace...\n")
-		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
-		-- C.printf("done initializing trace\n")
+	return terra(currTrace: &BaseTraceD, kernel: &MCMCKernel, samples: &SampleVectorType(computation))
 		var t0 = 0.0
 		for i=0,iters do
 			if verbose then
@@ -376,7 +393,7 @@ local function mcmc(computation, kernelgen, params)
 			currTrace = kernel:next(currTrace)
 			if i % lag == 0 and i >= burnin then
 				var derivedTrace = [&RandExecTrace(double, computation)](currTrace)
-				samps:push([Sample(RetValType)].stackAlloc(derivedTrace.returnValue, derivedTrace.logprob))
+				samples:push([SampleType(computation)].stackAlloc(derivedTrace.returnValue, derivedTrace.logprob))
 			end
 		end
 		if verbose then
@@ -385,50 +402,73 @@ local function mcmc(computation, kernelgen, params)
 			var t1 = util.currentTimeInSeconds()
 			C.printf("Time: %g\n", t1 - t0)
 		end
-		m.delete(kernel)
-		return samps
+		return currTrace
 	end
-	return `chain()
 end
 
--- Compute the mean of a set of values
+-- Generates code to initialize a trace from a computation and run an mcmc sampling loop on it, creating
+--    and returning the list of resulting samples
+-- (exists for backwards-compatibility with old code)
+local function mcmc(computation, kernelgen, params)
+	computation = spec.ensureProbComp(computation)
+	local function domcmc(comp)
+		return terra(currTrace: &BaseTraceD)
+			var kernel = [kernelgen()]
+			var samps = [SampleVectorType(comp)].stackAlloc()
+			currTrace = [mcmcSample(comp, params)](currTrace, kernel, &samps)
+			m.delete(kernel)
+			m.delete(currTrace)
+			return samps
+		end
+	end
+	local terra chain()
+		return [processTrace(computation, domcmc)]
+	end
+	return `[processTrace(computation, domcmc)]()
+end
+
+-- Compute the mean of a vector of values
 -- Value type must define + and scalar division
-local mean = templatize(function(V)
-	return terra(vals: &Vector(V))
+local mean = macro(function(vals)
+	return quote
 		var m = m.copy(vals:get(0))
 		for i=1,vals.size do
 			m = m + vals:get(i)
 		end
-		return m / [double](vals.size)
+		m = m / [double](vals.size)
+	in
+		m
 	end
 end)
 
--- Compute expectation over a set of samples
--- The return value type must define + and scalar division
-local expectation = templatize(function(RetValType)
-	return terra(samps: &Vector(Sample(RetValType)))
+-- Compute expectation over a vector of samples
+-- The value type must define + and scalar division
+local expectation = macro(function(samps)
+	return quote
 		var m = m.copy(samps:get(0).value)
 		for i=1,samps.size do
 			m = m + samps:get(i).value
 		end
-		return m / [double](samps.size)
+		m = m / [double](samps.size)
+	in
+		m
 	end
 end)
 
 -- Find the highest scoring sample
-local MAP = templatize(function(RetValType)
-	return terra(samps: &Vector(Sample(RetValType)))
-		var best = [Sample(RetValType)].stackAlloc()
-		best.logprob = [-math.huge]
-		for i=0,samps.size do
-			var s = samps:getPointer()
+local MAP = macro(function(samps)
+	return quote
+		var best = m.copy(samps(0))
+		for i=1,samps.size do
+			var s = samps:getPointer(i)
 			if s.logprob > best.logprob then
 				best.logprob = s.logprob
 				m.destruct(best.value)
 				best.value = m.copy(s.value)
 			end
 		end
-		return best.value
+	in
+		best.value
 	end
 end)
 
@@ -451,10 +491,17 @@ return
 	MultiKernel = MultiKernel,
 	globals = {
 		RandomWalk = RandomWalk,
-		-- ADRandomWalk = ADRandomWalk,
 		GaussianDrift = GaussianDrift,
 		Schedule = Schedule,
 		forwardSample = forwardSample,
+		processTrace = processTrace,
+		types = 
+		{
+			ReturnType = ReturnType,
+			SampleType = SampleType,
+			SampleVectorType = SampleVectorType
+		},
+		mcmcSample = mcmcSample,
 		mcmc = mcmc,
 		rejectionSample = rejectionSample,
 		mean = mean,

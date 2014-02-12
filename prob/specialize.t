@@ -116,6 +116,13 @@ end
 local function isProbComp(comp)
 	return getmetatable(comp) == specthunkmt
 end
+local function ensureProbComp(comp)
+	if isProbComp(comp) then
+		return comp
+	else
+		return probcomp(comp)
+	end
+end
 
 
 return
@@ -129,6 +136,7 @@ return
 	isSpecializable = isSpecializable,
 	probcomp = probcomp,
 	isProbComp = isProbComp,
+	ensureProbComp = ensureProbComp,
 	registerPreGlobalSpecializationEvent = registerPreGlobalSpecializationEvent,
 	registerGlobalSpecializable = registerGlobalSpecializable
 }
