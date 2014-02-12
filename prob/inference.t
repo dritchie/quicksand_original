@@ -350,14 +350,14 @@ end
 -- Takes a computation, initializes a trace for it, then runs any user-provided function
 --    on that trace.
 -- fn is a lua function that gets the computation as an argument and is expected to return
---    a Terra function that takes the trace as an argument (&BaseTrace(double))
+--    a Terra function that takes the trace as an argument (&BaseTrace(double)). This Terra
+--    function assumes ownership of the trace and must delete it.
 -- Returns a no-arg terra function that does the processing
 local function processTrace(computation, fn)
 	computation = spec.ensureProbComp(computation)
 	return terra()
 		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
 		var retval = [fn(computation)](currTrace)
-		-- m.delete(currTrace)
 		return retval
 	end
 end
@@ -420,9 +420,6 @@ local function mcmc(computation, kernelgen, params)
 			m.delete(currTrace)
 			return samps
 		end
-	end
-	local terra chain()
-		return [processTrace(computation, domcmc)]
 	end
 	return `[processTrace(computation, domcmc)]()
 end
