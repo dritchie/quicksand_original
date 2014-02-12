@@ -330,37 +330,6 @@ local Sample = templatize(function(ValType)
 	return Samp
 end)
 
-local function forwardSample(computation, numsamps)
-	computation = spec.probcomp(computation)
-	local comp = computation()
-	local CompType = comp:getdefinitions()[1]:gettype()
-	local RetValType = CompType.returns[1]
-	local terra fn()
-		var samps = [Vector(Sample(RetValType))].stackAlloc()
-		for i=0,numsamps do
-			var retval = comp()
-			samps:push([Sample(RetValType)].stackAlloc(retval, 0.0))
-			m.destruct(retval)
-		end
-		return samps
-	end
-	return `fn()
-end
-
--- Takes a computation, initializes a trace for it, then runs any user-provided function
---    on that trace.
--- fn is a lua function that gets the computation as an argument and is expected to return
---    a Terra function that takes the trace as an argument (&BaseTrace(double)). This Terra
---    function assumes ownership of the trace and must delete it.
--- Returns a no-arg terra function that does the processing
-local function processTrace(computation, fn)
-	computation = spec.ensureProbComp(computation)
-	return terra()
-		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
-		var retval = [fn(computation)](currTrace)
-		return retval
-	end
-end
 
 -- Convenience methods for managing types related to samples from computations.
 local ReturnType = templatize(function(computation)
@@ -372,6 +341,24 @@ end)
 local SampleVectorType = templatize(function(computation)
 	return Vector(SampleType(computation))
 end)
+
+-- Draw unconditioned prior samples from computation by just running it
+--    (i.e. not even creating any traces)
+local function forwardSample(computation, numsamps)
+	computation = spec.probcomp(computation)
+	local comp = computation()
+	local terra fn()
+		var samps = [SampleVectorType(computation)].stackAlloc()
+		for i=0,numsamps do
+			var retval = comp()
+			samps:push([SampleType(computation)].stackAlloc(retval, 0.0))
+			m.destruct(retval)
+		end
+		return samps
+	end
+	return `fn()
+end
+
 
 -- Runs an mcmc sampling loop on trace using the transition kernel specified by
 --    kernel, storing the results in samples.
@@ -408,20 +395,18 @@ end
 
 -- Generates code to initialize a trace from a computation and run an mcmc sampling loop on it, creating
 --    and returning the list of resulting samples
--- (exists for backwards-compatibility with old code)
 local function mcmc(computation, kernelgen, params)
 	computation = spec.ensureProbComp(computation)
-	local function domcmc(comp)
-		return terra(currTrace: &BaseTraceD)
-			var kernel = [kernelgen()]
-			var samps = [SampleVectorType(comp)].stackAlloc()
-			currTrace = [mcmcSample(comp, params)](currTrace, kernel, &samps)
-			m.delete(kernel)
-			m.delete(currTrace)
-			return samps
-		end
+	local terra domcmc()
+		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
+		var kernel = [kernelgen()]
+		var samps = [SampleVectorType(computation)].stackAlloc()
+		currTrace = [mcmcSample(computation, params)](currTrace, kernel, &samps)
+		m.delete(kernel)
+		m.delete(currTrace)
+		return samps
 	end
-	return `[processTrace(computation, domcmc)]()
+	return `domcmc()
 end
 
 -- Compute the mean of a vector of values
@@ -490,14 +475,13 @@ return
 		RandomWalk = RandomWalk,
 		GaussianDrift = GaussianDrift,
 		Schedule = Schedule,
-		forwardSample = forwardSample,
-		processTrace = processTrace,
 		types = 
 		{
 			ReturnType = ReturnType,
 			SampleType = SampleType,
 			SampleVectorType = SampleVectorType
 		},
+		forwardSample = forwardSample,
 		mcmcSample = mcmcSample,
 		mcmc = mcmc,
 		rejectionSample = rejectionSample,
