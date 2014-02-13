@@ -271,7 +271,7 @@ GlobalTrace = templatize(function(ProbType)
 		loopcounters: HashMap(IdSeq, int),
 		lastVarList: &Vector(&RVar),
 		currVarIndex: uint,
-		manifolds: Vector(double)
+		manifolds: Vector(ProbType)
 	}
 	inheritance.dynamicExtend(ParentClass, GlobalTraceT)
 
@@ -502,6 +502,7 @@ RandExecTrace = templatize(function(ProbType, computation)
 			self.loopcounters:clear()
 			self.conditionsSatisfied = true
 			self.currVarIndex = 0
+			self.manifolds:clear()
 
 			-- Clear out the flat var list so we can properly refill it
 			[structureChange and (`self.varlist:clear()) or (quote end)]
@@ -713,6 +714,7 @@ return
 		pfn = pfn,
 		pmethod = pmethod,
 		factor = factor,
+		manifold = manifold,
 		condition = condition
 	}
 }
