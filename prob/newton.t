@@ -56,6 +56,12 @@ local ReturnCodes =
 }
 
 
+-- NOTE: In general, everything in this file generates and returns macros, rather than functions,
+--    because we don't know anything about where the function-like object F comes from. In particular
+--    if it refers to a variable from another function's scope (emulating a closure), then we cannot
+--    use it in any other function--we must use macros instead.
+
+
 -- Generates functions that do Newton's method to try and solve non-linear systems
 --    of equations
 -- F: Function describing system to be solved. Should be overloaded with two definitions:
@@ -69,48 +75,51 @@ local ReturnCodes =
 function newton(F, linsolver, convergeThresh, maxIters)
 	convergeThresh = convergeThresh or 1e-10
 	maxIters = maxIters or 100
-	return terra(x: &Vector(double))
-		var y = [Vector(double)].stackAlloc()
-		var J = [Grid2D(double)].stackAlloc(2, 2)
-		var delta = [Vector(double)].stackAlloc()
-		var b = [Vector(double)].stackAlloc()
-		var converged = ReturnCodes.DidNotConverge
-		for iter=0,maxIters do
-			F(x, &y, &J)
-			-- Update rule is J(x) * (x' - x) = -F(x)
-			b:resize(y.size)
-			for i=0,y.size do b(i) = -y(i) end
-			linsolver(&J, &b, &delta)
-			-- Update x in place
-			for i=0,x.size do
-				x(i) = x(i) + delta(i)
+	return macro(function(x)
+		return quote
+			var y = [Vector(double)].stackAlloc()
+			var J = [Grid2D(double)].stackAlloc(2, 2)
+			var delta = [Vector(double)].stackAlloc()
+			var b = [Vector(double)].stackAlloc()
+			var converged = ReturnCodes.DidNotConverge
+			for iter=0,maxIters do
+				F(x, &y, &J)
+				-- Update rule is J(x) * (x' - x) = -F(x)
+				b:resize(y.size)
+				for i=0,y.size do b(i) = -y(i) end
+				linsolver(&J, &b, &delta)
+				-- Update x in place
+				for i=0,x.size do
+					x(i) = x(i) + delta(i)
+				end
+				-- We've converged to a solution if the outputs are zero
+				var ynorm = 0.0
+				for i=0,y.size do
+					ynorm = ynorm + y(i)*y(i)
+				end
+				if ynorm < convergeThresh then
+					converged = ReturnCodes.ConvergedToSolution
+					break
+				end
+				-- Also terminate if the parameters aren't changing, though
+				--    this is 'bad' convergence (so don't mark it as 'converged')
+				var deltaNorm = 0.0
+				for i=0,y.size do
+					deltaNorm = deltaNorm + delta(i)*delta(i)
+				end
+				if deltaNorm < convergeThresh then
+					converged = ReturnCodes.ConvergedToNonSolution
+					break
+				end
 			end
-			-- We've converged to a solution if the outputs are zero
-			var ynorm = 0.0
-			for i=0,y.size do
-				ynorm = ynorm + y(i)*y(i)
-			end
-			if ynorm < convergeThresh then
-				converged = ReturnCodes.ConvergedToSolution
-				break
-			end
-			-- Also terminate if the parameters aren't changing, though
-			--    this is 'bad' convergence (so don't mark it as 'converged')
-			var deltaNorm = 0.0
-			for i=0,y.size do
-				deltaNorm = deltaNorm + delta(i)*delta(i)
-			end
-			if deltaNorm < convergeThresh then
-				converged = ReturnCodes.ConvergedToNonSolution
-				break
-			end
+			m.destruct(b)
+			m.destruct(delta)
+			m.destruct(J)
+			m.destruct(y)
+		in
+			converged
 		end
-		m.destruct(b)
-		m.destruct(delta)
-		m.destruct(J)
-		m.destruct(y)
-		return converged
-	end
+	end)
 end
 
 --
@@ -131,160 +140,175 @@ function backtrackingNewton(F, linsolver, convergeThresh, maxIters, stepMax)
 		for i=0,y.size do sum = y(i)*y(i) end
 		return 0.5*sum
 	end
-	local terra f(x: &Vector(double))
-		var y = [Vector(double)].stackAlloc()
-		F(x, &y)
-		var ret = halfDotProd(&y)
-		m.destruct(y)
-		return ret
-	end
+	local f = macro(function(x)
+		return quote
+			var y = [Vector(double)].stackAlloc()
+			F(x, &y)
+			var ret = halfDotProd(&y)
+			m.destruct(y)
+		in
+			ret
+		end
+	end)
 
 	-- Given initial point x0 and Newton step p, fill in a new point xOut along p that
 	--    decreases the value of f sufficiently.
 	-- Returns true if the search succeeded, false if the new point is too close
 	--    to the starting point.
 	local alpha = 1e-4
-	local terra lineSearch(x0: &Vector(double), f0: double, fGrad0: &Vector(double), p: &Vector(double),
-						   xOut: &Vector(double))
-		-- Vars we'll need
-		var f2 = 0.0
-		var lambda2 = 0.0
-		-- Compute slope of the step as a function of lambda at x0
-		var slope = 0.0
-		for i=0,p.size do slope = slope + fGrad0(i) * p(i) end
-		-- Have to normalize initial step?
-		var pnorm = 0.0
-		for i=0,p.size do pnorm = pnorm + p(i)*p(i) end
-		pnorm = C.sqrt(pnorm)
-		if pnorm > stepMax then for i=0,p.size do p(i) = p(i)/pnorm end end
-		-- Figure out the minimum lambda we're willing to accept
-		var test = 0.0
-		for i=0,p.size do
-			var temp = C.fabs(p(i))/C.fmax(C.fabs(x0(i)), 1.0)
-			test = C.fmax(test, temp)
-		end
-		var lambdaMin = C.dbl_epsilon() / test
-		-- C.printf("lambdaMin: %g\n", lambdaMin)
-		-- Start the backtracking loop
-		var lambda = 1.0
-		xOut:resize(x0.size)
-		while true do
-			-- C.printf("lambda: %g\n", lambda)
-			for i=0,p.size do xOut(i) = x0(i) + lambda*p(i) end
-			var f1 = f(xOut)
-			-- Terminate if we're too close to the starting point; this may signify
-			--    convergence, or we may be stuck in a local minimum of f
-			if lambda < lambdaMin then return false end
-			-- Terminate if we've sufficiently decreased f
-			if f1 <= f0 + alpha*lambda*slope then return true end
-			-- Otherwise, we need to backtrack
-			var tmpLambda = lambda
-			-- If this is the first backtrack, use a quadratic approximation
-			if lambda == 1.0 then
-				tmpLambda = -slope / (2.0 * (f1 - f0 - slope))
-			-- If this is backtrack #2 or higher, use a cubic approximation
-			else
-				var rhs1 = f1 - f0 - lambda*slope
-				var rhs2 = f2 - f0 - lambda2*slope
-				var a = (rhs1 / (lambda*lambda) - rhs2 / (lambda2*lambda2)) / (lambda - lambda2)
-				var b = (-lambda2*rhs1 / (lambda*lambda) + lambda*rhs2 / (lambda2*lambda2)) / (lambda - lambda2)
-				if a == 0.0 then
-					tmpLambda = -slope / (2.0*b)
-				else
-					var disc = b*b - 3.0*a*slope
-					if disc < 0.0 then tmpLambda = 0.5*lambda
-					elseif b <= 0 then tmpLambda = (-b + C.sqrt(disc)) / (3.0*a)
-					else tmpLambda = -slope / (b + C.sqrt(disc)) end
-				end
-				-- Guard against too big lambdas
-				tmpLambda = C.fmin(tmpLambda, 0.5*lambda)
-			end
-			lambda2 = lambda
-			f2 = f1
-			-- Guard against too small lambdas
-			lambda = C.fmax(tmpLambda, 0.1*lambda)
-		end
-	end
-
-	return terra(x: &Vector(double))
-		var xNew = [Vector(double)].stackAlloc(x.size, 0.0)
-		var fGrad0 = [Vector(double)].stackAlloc(x.size, 0.0)
-		var y = [Vector(double)].stackAlloc()
-		var J = [Grid2D(double)].stackAlloc(2, 2)
-		var p = [Vector(double)].stackAlloc()
-		var b = [Vector(double)].stackAlloc()
-		var converged = ReturnCodes.DidNotConverge
-		for iter=0,maxIters do
-			F(x, &y, &J)
-			-- Compute full Newton step: p = J(x) * (x' - x) = -F(x)
-			b:resize(y.size)
-			for i=0,y.size do b(i) = -y(i) end
-			linsolver(&J, &b, &p)
-
-			-- Backtracking line search
-			var f0 = halfDotProd(&y)
-			-- The gradient of f w.r.t x is just y*J, or a vector where element j
-			--    is the dot product of y with column j of J (i.e. J(.,j))
-			for j=0,x.size do
-				var sum = 0.0
-				for i=0,y.size do
-					sum = sum + y(i)*J(i,j)
-				end
-				fGrad0(j) = sum
-			end
-			var lineSearchSucceeded = lineSearch(x, f0, &fGrad0, &p, &xNew)
-
-			-- If y has converged to zeros, then we know we can terminate
-			var ynorm = 0.0
-			for i=0,y.size do
-				ynorm = ynorm + y(i)*y(i)
-			end
-			if ynorm < convergeThresh then
-				converged = ReturnCodes.ConvergedToSolution
-				-- C.printf("Terminating due to output convergence\n")
-				break
-			end
-
-			-- If the search failed to find a distant enough point, then we
-			--    also terminate, though this is a 'bad' convergence, since
-			--    the equations have not been satisfied.
-			-- We also check whether the termination was caused by us reaching
-			--    a local mininum of f (i.e. gradient of f all zeros)
-			if not lineSearchSucceeded then
-				var gradnorm = 0.0
-				for i=0,fGrad0.size do gradnorm = gradnorm + fGrad0(i)*fGrad0(i) end
-				gradnorm = C.sqrt(gradnorm)
-				if gradnorm < convergeThresh then
-					converged = ReturnCodes.ConvergedToLocalMinimum
-				else
-					converged = ReturnCodes.ConvergedToNonSolution
-				end
-				-- C.printf("Line search failed to find a distant enough point\n")
-				break
-			end
-
-			-- Finally, we terminate if the parameters haven't changed much.
-			-- (Again, this is a 'bad' convergence)
+	local lineSearch = macro(function(x0, f0, fGrad0, p, xOut)
+		return quote
+			-- Vars we'll need
+			var f2 = 0.0
+			var lambda2 = 0.0
+			-- Compute slope of the step as a function of lambda at x0
+			var slope = 0.0
+			for i=0,p.size do slope = slope + fGrad0(i) * p(i) end
+			-- Have to normalize initial step?
 			var pnorm = 0.0
-			for i=0,x.size do
-				var diff = xNew(i) - x(i)
-				pnorm = pnorm + diff*diff
-				x(i) = xNew(i)
+			for i=0,p.size do pnorm = pnorm + p(i)*p(i) end
+			pnorm = C.sqrt(pnorm)
+			if pnorm > stepMax then for i=0,p.size do p(i) = p(i)/pnorm end end
+			-- Figure out the minimum lambda we're willing to accept
+			var test = 0.0
+			for i=0,p.size do
+				var temp = C.fabs(p(i))/C.fmax(C.fabs(x0(i)), 1.0)
+				test = C.fmax(test, temp)
 			end
-			if pnorm < convergeThresh then
-				converged = ReturnCodes.ConvergedToNonSolution
-				-- C.printf("Terminating due to parameter convergence\n")
-				break
+			var lambdaMin = C.dbl_epsilon() / test
+			-- C.printf("lambdaMin: %g\n", lambdaMin)
+			-- Start the backtracking loop
+			var lambda = 1.0
+			xOut:resize(x0.size)
+			var succeeded = false
+			while true do
+				-- C.printf("lambda: %g\n", lambda)
+				for i=0,p.size do xOut(i) = x0(i) + lambda*p(i) end
+				var f1 = f(xOut)
+				-- Terminate if we're too close to the starting point; this may signify
+				--    convergence, or we may be stuck in a local minimum of f
+				if lambda < lambdaMin then
+					break
+				end
+				-- Terminate if we've sufficiently decreased f
+				if f1 <= f0 + alpha*lambda*slope then
+					succeeded = true
+					break
+				end
+				-- Otherwise, we need to backtrack
+				var tmpLambda = lambda
+				-- If this is the first backtrack, use a quadratic approximation
+				if lambda == 1.0 then
+					tmpLambda = -slope / (2.0 * (f1 - f0 - slope))
+				-- If this is backtrack #2 or higher, use a cubic approximation
+				else
+					var rhs1 = f1 - f0 - lambda*slope
+					var rhs2 = f2 - f0 - lambda2*slope
+					var a = (rhs1 / (lambda*lambda) - rhs2 / (lambda2*lambda2)) / (lambda - lambda2)
+					var b = (-lambda2*rhs1 / (lambda*lambda) + lambda*rhs2 / (lambda2*lambda2)) / (lambda - lambda2)
+					if a == 0.0 then
+						tmpLambda = -slope / (2.0*b)
+					else
+						var disc = b*b - 3.0*a*slope
+						if disc < 0.0 then tmpLambda = 0.5*lambda
+						elseif b <= 0 then tmpLambda = (-b + C.sqrt(disc)) / (3.0*a)
+						else tmpLambda = -slope / (b + C.sqrt(disc)) end
+					end
+					-- Guard against too big lambdas
+					tmpLambda = C.fmin(tmpLambda, 0.5*lambda)
+				end
+				lambda2 = lambda
+				f2 = f1
+				-- Guard against too small lambdas
+				lambda = C.fmax(tmpLambda, 0.1*lambda)
 			end
+		in
+			succeeded
 		end
-		m.destruct(b)
-		m.destruct(p)
-		m.destruct(J)
-		m.destruct(y)
-		m.destruct(fGrad0)
-		m.destruct(xNew)
-		return converged
-	end
+	end)
+
+	return macro(function(x)
+		return quote
+			var xNew = [Vector(double)].stackAlloc(x.size, 0.0)
+			var fGrad0 = [Vector(double)].stackAlloc(x.size, 0.0)
+			var y = [Vector(double)].stackAlloc()
+			var J = [Grid2D(double)].stackAlloc(2, 2)
+			var p = [Vector(double)].stackAlloc()
+			var b = [Vector(double)].stackAlloc()
+			var converged = ReturnCodes.DidNotConverge
+			for iter=0,maxIters do
+				F(x, &y, &J)
+				-- Compute full Newton step: p = J(x) * (x' - x) = -F(x)
+				b:resize(y.size)
+				for i=0,y.size do b(i) = -y(i) end
+				linsolver(&J, &b, &p)
+
+				-- Backtracking line search
+				var f0 = halfDotProd(&y)
+				-- The gradient of f w.r.t x is just y*J, or a vector where element j
+				--    is the dot product of y with column j of J (i.e. J(.,j))
+				for j=0,x.size do
+					var sum = 0.0
+					for i=0,y.size do
+						sum = sum + y(i)*J(i,j)
+					end
+					fGrad0(j) = sum
+				end
+				var lineSearchSucceeded = lineSearch(x, f0, &fGrad0, &p, &xNew)
+
+				-- If y has converged to zeros, then we know we can terminate
+				var ynorm = 0.0
+				for i=0,y.size do
+					ynorm = ynorm + y(i)*y(i)
+				end
+				if ynorm < convergeThresh then
+					converged = ReturnCodes.ConvergedToSolution
+					-- C.printf("Terminating due to output convergence\n")
+					break
+				end
+
+				-- If the search failed to find a distant enough point, then we
+				--    also terminate, though this is a 'bad' convergence, since
+				--    the equations have not been satisfied.
+				-- We also check whether the termination was caused by us reaching
+				--    a local mininum of f (i.e. gradient of f all zeros)
+				if not lineSearchSucceeded then
+					var gradnorm = 0.0
+					for i=0,fGrad0.size do gradnorm = gradnorm + fGrad0(i)*fGrad0(i) end
+					gradnorm = C.sqrt(gradnorm)
+					if gradnorm < convergeThresh then
+						converged = ReturnCodes.ConvergedToLocalMinimum
+					else
+						converged = ReturnCodes.ConvergedToNonSolution
+					end
+					-- C.printf("Line search failed to find a distant enough point\n")
+					break
+				end
+
+				-- Finally, we terminate if the parameters haven't changed much.
+				-- (Again, this is a 'bad' convergence)
+				var pnorm = 0.0
+				for i=0,x.size do
+					var diff = xNew(i) - x(i)
+					pnorm = pnorm + diff*diff
+					x(i) = xNew(i)
+				end
+				if pnorm < convergeThresh then
+					converged = ReturnCodes.ConvergedToNonSolution
+					-- C.printf("Terminating due to parameter convergence\n")
+					break
+				end
+			end
+			m.destruct(b)
+			m.destruct(p)
+			m.destruct(J)
+			m.destruct(y)
+			m.destruct(fGrad0)
+			m.destruct(xNew)
+		in
+			converged
+		end
+	end)
 end
 
 
@@ -303,126 +327,140 @@ local function simpleBacktrackingNewton(F, linsolver, convergeThresh, maxIters)
 		for i=0,y.size do sum = y(i)*y(i) end
 		return 0.5*sum
 	end
-	local terra f(x: &Vector(double))
-		var y = [Vector(double)].stackAlloc()
-		F(x, &y)
-		var ret = halfDotProd(&y)
-		m.destruct(y)
-		return ret
-	end
+	local f = macro(function(x)
+		return quote
+			var y = [Vector(double)].stackAlloc()
+			F(x, &y)
+			var ret = halfDotProd(&y)
+			m.destruct(y)
+		in
+			ret
+		end
+	end)
 
 	-- Really dumb 'line search' that just repeatedly halves lambda until it finds a step that
 	--    decreases f (or it gives up due to a too-small step)
 	local alpha = 1e-4
-	local terra lineSearch(x0: &Vector(double), f0: double, fGrad0: &Vector(double), p: &Vector(double),
-						   xOut: &Vector(double))
-		-- Compute slope of the step as a function of lambda at x0
-		var slope = 0.0
-		for i=0,p.size do slope = slope + fGrad0(i) * p(i) end
-		-- Figure out the minimum lambda we're willing to accept
-		var test = 0.0
-		for i=0,p.size do
-			var temp = C.fabs(p(i))/C.fmax(C.fabs(x0(i)), 1.0)
-			test = C.fmax(test, temp)
+	local lineSearch = macro(function(x0, f0, fGrad0, p, xOut)
+		return quote
+			-- Compute slope of the step as a function of lambda at x0
+			var slope = 0.0
+			for i=0,p.size do slope = slope + fGrad0(i) * p(i) end
+			-- Figure out the minimum lambda we're willing to accept
+			var test = 0.0
+			for i=0,p.size do
+				var temp = C.fabs(p(i))/C.fmax(C.fabs(x0(i)), 1.0)
+				test = C.fmax(test, temp)
+			end
+			var lambdaMin = C.dbl_epsilon() / test
+			-- Start the backtracking loop
+			var lambda = 1.0
+			xOut:resize(x0.size)
+			var succeeded = false
+			while true do
+				for i=0,p.size do xOut(i) = x0(i) + lambda*p(i) end
+				var f1 = f(xOut)
+				-- Terminate if we're too close to the starting point; this may signify
+				--    convergence, or we may be stuck in a local minimum of f
+				if lambda < lambdaMin then
+					break
+				end
+				-- Terminate if we've sufficiently decreased f
+				-- if f1 <= f0 + alpha*lambda*slope then return true end
+				if f1 < f0 then
+					succeeded = true
+					break
+				end
+				-- Otherwise, we need to backtrack
+				lambda = 0.5*lambda
+			end
+		in
+			succeeded
 		end
-		var lambdaMin = C.dbl_epsilon() / test
-		-- Start the backtracking loop
-		var lambda = 1.0
-		xOut:resize(x0.size)
-		while true do
-			for i=0,p.size do xOut(i) = x0(i) + lambda*p(i) end
-			var f1 = f(xOut)
-			-- Terminate if we're too close to the starting point; this may signify
-			--    convergence, or we may be stuck in a local minimum of f
-			if lambda < lambdaMin then return false end
-			-- Terminate if we've sufficiently decreased f
-			-- if f1 <= f0 + alpha*lambda*slope then return true end
-			if f1 < f0 then return true end
-			-- Otherwise, we need to backtrack
-			lambda = 0.5*lambda
-		end
-	end
+	end)
 
-	return terra(x: &Vector(double))
-		var xNew = [Vector(double)].stackAlloc(x.size, 0.0)
-		var fGrad0 = [Vector(double)].stackAlloc(x.size, 0.0)
-		var y = [Vector(double)].stackAlloc()
-		var J = [Grid2D(double)].stackAlloc(2, 2)
-		var p = [Vector(double)].stackAlloc()
-		var b = [Vector(double)].stackAlloc()
-		var converged = ReturnCodes.DidNotConverge
-		for iter=0,maxIters do
-			F(x, &y, &J)
-			-- Compute full Newton step: p = J(x) * (x' - x) = -F(x)
-			b:resize(y.size)
-			for i=0,y.size do b(i) = -y(i) end
-			linsolver(&J, &b, &p)
+	return macro(function(x)
+		return quote
+			var xNew = [Vector(double)].stackAlloc(x.size, 0.0)
+			var fGrad0 = [Vector(double)].stackAlloc(x.size, 0.0)
+			var y = [Vector(double)].stackAlloc()
+			var J = [Grid2D(double)].stackAlloc(2, 2)
+			var p = [Vector(double)].stackAlloc()
+			var b = [Vector(double)].stackAlloc()
+			var converged = ReturnCodes.DidNotConverge
+			for iter=0,maxIters do
+				F(x, &y, &J)
+				-- Compute full Newton step: p = J(x) * (x' - x) = -F(x)
+				b:resize(y.size)
+				for i=0,y.size do b(i) = -y(i) end
+				linsolver(&J, &b, &p)
 
-			-- Backtracking line search
-			var f0 = halfDotProd(&y)
-			-- The gradient of f w.r.t x is just y*J, or a vector where element j
-			--    is the dot product of y with column j of J (i.e. J(.,j))
-			for j=0,x.size do
-				var sum = 0.0
+				-- Backtracking line search
+				var f0 = halfDotProd(&y)
+				-- The gradient of f w.r.t x is just y*J, or a vector where element j
+				--    is the dot product of y with column j of J (i.e. J(.,j))
+				for j=0,x.size do
+					var sum = 0.0
+					for i=0,y.size do
+						sum = sum + y(i)*J(i,j)
+					end
+					fGrad0(j) = sum
+				end
+				var lineSearchSucceeded = lineSearch(x, f0, &fGrad0, &p, &xNew)
+
+				-- If y has converged to zeros, then we know we can terminate
+				var ynorm = 0.0
 				for i=0,y.size do
-					sum = sum + y(i)*J(i,j)
+					ynorm = ynorm + y(i)*y(i)
 				end
-				fGrad0(j) = sum
-			end
-			var lineSearchSucceeded = lineSearch(x, f0, &fGrad0, &p, &xNew)
+				if ynorm < convergeThresh then
+					converged = ReturnCodes.ConvergedToSolution
+					-- C.printf("Terminating due to output convergence\n")
+					break
+				end
 
-			-- If y has converged to zeros, then we know we can terminate
-			var ynorm = 0.0
-			for i=0,y.size do
-				ynorm = ynorm + y(i)*y(i)
-			end
-			if ynorm < convergeThresh then
-				converged = ReturnCodes.ConvergedToSolution
-				-- C.printf("Terminating due to output convergence\n")
-				break
-			end
+				-- If the search failed to find a distant enough point, then we
+				--    also terminate, though this is a 'bad' convergence, since
+				--    the equations have not been satisfied.
+				-- We also check whether the termination was caused by us reaching
+				--    a local mininum of f (i.e. gradient of f all zeros)
+				if not lineSearchSucceeded then
+					var gradnorm = 0.0
+					for i=0,fGrad0.size do gradnorm = gradnorm + fGrad0(i)*fGrad0(i) end
+					gradnorm = C.sqrt(gradnorm)
+					if gradnorm < convergeThresh then
+						converged = ReturnCodes.ConvergedToLocalMinimum
+					else
+						converged = ReturnCodes.ConvergedToNonSolution
+					end
+					-- C.printf("Line search failed to find a distant enough point\n")
+					break
+				end
 
-			-- If the search failed to find a distant enough point, then we
-			--    also terminate, though this is a 'bad' convergence, since
-			--    the equations have not been satisfied.
-			-- We also check whether the termination was caused by us reaching
-			--    a local mininum of f (i.e. gradient of f all zeros)
-			if not lineSearchSucceeded then
-				var gradnorm = 0.0
-				for i=0,fGrad0.size do gradnorm = gradnorm + fGrad0(i)*fGrad0(i) end
-				gradnorm = C.sqrt(gradnorm)
-				if gradnorm < convergeThresh then
-					converged = ReturnCodes.ConvergedToLocalMinimum
-				else
+				-- Finally, we terminate if the parameters haven't changed much.
+				-- (Again, this is a 'bad' convergence)
+				var pnorm = 0.0
+				for i=0,x.size do
+					var diff = xNew(i) - x(i)
+					pnorm = pnorm + diff*diff
+					x(i) = xNew(i)
+				end
+				if pnorm < convergeThresh then
 					converged = ReturnCodes.ConvergedToNonSolution
+					-- C.printf("Terminating due to parameter convergence\n")
+					break
 				end
-				-- C.printf("Line search failed to find a distant enough point\n")
-				break
 			end
-
-			-- Finally, we terminate if the parameters haven't changed much.
-			-- (Again, this is a 'bad' convergence)
-			var pnorm = 0.0
-			for i=0,x.size do
-				var diff = xNew(i) - x(i)
-				pnorm = pnorm + diff*diff
-				x(i) = xNew(i)
-			end
-			if pnorm < convergeThresh then
-				converged = ReturnCodes.ConvergedToNonSolution
-				-- C.printf("Terminating due to parameter convergence\n")
-				break
-			end
+			m.destruct(b)
+			m.destruct(p)
+			m.destruct(J)
+			m.destruct(y)
+			m.destruct(fGrad0)
+			m.destruct(xNew)
+		in
+			converged
 		end
-		m.destruct(b)
-		m.destruct(p)
-		m.destruct(J)
-		m.destruct(y)
-		m.destruct(fGrad0)
-		m.destruct(xNew)
-		return converged
-	end
-
+	end)
 end
 
 
