@@ -342,6 +342,13 @@ local SampleVectorType = templatize(function(computation)
 	return Vector(SampleType(computation))
 end)
 
+local function extractReturnValue(computation)
+	local DerivedTraceType = RandExecTrace(double, computation)
+	return macro(function(currTrace)
+		return `[&DerivedTraceType](currTrace).returnValue
+	end)
+end
+
 -- Draw unconditioned prior samples from computation by just running it
 --    (i.e. not even creating any traces)
 local function forwardSample(computation, numsamps)
@@ -361,7 +368,8 @@ end
 
 
 -- Runs an mcmc sampling loop on trace using the transition kernel specified by
---    kernel, storing the results in samples.
+--    kernel, storing the results in samples
+-- samples is optional; if nil, the samples will be discarded
 -- params are: verbose, numsamps, lag, burnin
 local function mcmcSample(computation, params)
 	computation = spec.ensureProbComp(computation)
@@ -378,7 +386,7 @@ local function mcmcSample(computation, params)
 				if i == 1 then t0 = util.currentTimeInSeconds() end
 			end
 			currTrace = kernel:next(currTrace)
-			if i % lag == 0 and i >= burnin then
+			if samples ~= nil and i % lag == 0 and i >= burnin then
 				var derivedTrace = [&RandExecTrace(double, computation)](currTrace)
 				samples:push([SampleType(computation)].stackAlloc(derivedTrace.returnValue, derivedTrace.logprob))
 			end
@@ -477,6 +485,7 @@ return
 		SampleType = SampleType,
 		SampleVectorType = SampleVectorType
 	},
+	extractReturnValue = extractReturnValue,
 	mcmcSample = mcmcSample,
 	globals = {
 		RandomWalk = RandomWalk,

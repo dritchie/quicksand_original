@@ -671,21 +671,30 @@ local factor = spec.specializable(function(...)
 	end)
 end)
 
--- TODO: specialization parameter for relaxing manifolds into tight factors.
--- (macro could take an optional second parameter for tightness)
 local manifold = spec.specializable(function(...)
 	local factorEval = spec.paramFromList("factorEval", ...)
 	local doingInference = spec.paramFromList("doingInference", ...)
 	local scalarType = spec.paramFromList("scalarType", ...)
+	local relaxManifold = spec.paramFromList("relaxManifold", ...)
 	local globTrace = globalTrace(scalarType)
-	return macro(function(num)
+	return macro(function(num, softness)
 		-- Do not generate any code if we're compiling a specialization
 		--    without factor evaluation, or if we're running the code outside of
 		--    an inference engine
 		if not doingInference or not factorEval then
 			return quote end
 		end
-		return `globTrace:manifold(num)
+		-- Otherwise, what we do depends on whether we're relaxing
+		--    manifolds or not.
+		if relaxManifold then
+			if not softness then
+				error("Need to provide softness parameter for manifold relaxation")
+			else
+				return `globTrace:factor([rand.gaussian_logprob(scalarType)](num, 0.0, softness))
+			end
+		else
+			return `globTrace:manifold(num)
+		end
 	end)
 end)
 

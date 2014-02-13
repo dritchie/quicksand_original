@@ -26,6 +26,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 									  temperAcceptHamiltonian, temperGuideHamiltonian,
 									  temperInitialMomentum,
 									  tempTrajectoryMult,
+									  relaxManifolds,
 									  pmrAlpha, verbosity)
 	local doTempering = tempTrajectoryMult ~= 1.0
 	local sqrtTemperingMult = math.sqrt(tempTrajectoryMult)
@@ -108,7 +109,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		for i=0,self.adNonstructuralVars.size do
 			self.adNonstructuralVars:get(i):setRawRealComponents(&self.indepVarNums, &index)
 		end
-		[trace.traceUpdate({structureChange=false})](self.adTrace)
+		[trace.traceUpdate({structureChange=false, relaxManifolds=relaxManifolds})](self.adTrace)
 		var lp = self.adTrace.logprob:val()
 		var duallp = self.adTrace.logprob
 		[util.optionally(temperGuideHamiltonian, function() return quote 
@@ -472,7 +473,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		--    then we run it now
 		[util.optionally(usePrimalLP, function() return quote
 			copyNonstructRealsIntoTrace(&pos, self.dTrace)
-			[trace.traceUpdate({structureChange=false})](self.dTrace)
+			[trace.traceUpdate({structureChange=false, relaxManifolds=relaxManifolds})](self.dTrace)
 			newlp = self.dTrace.logprob
 		end end)]
 
@@ -559,6 +560,7 @@ end,
  {"temperAcceptHamiltonian", false}, {"temperGuideHamiltonian", false},
  {"temperInitialMomentum", false},
  {"tempTrajectoryMult", 1.0},
+ {"relaxManifolds", false},
  {"pmrAlpha", 0.0}, {"verbosity", 0}})
 
 
