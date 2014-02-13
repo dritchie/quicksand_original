@@ -2,7 +2,7 @@ local m = terralib.require("mem")
 local Vector = terralib.require("vector")
 local Grid2D = terralib.require("grid").Grid2D
 local ad = terralib.require("ad")
-local linsolve = terralib.require("linsolve")
+local linsolve = terralib.require("prob.linsolve")
 local util = terralib.require("util")
 local C = terralib.includecstring [[
 #include <stdio.h>
@@ -12,35 +12,37 @@ inline double dbl_epsilon() { return DBL_EPSILON; }
 ]]
 
 
--- Takes a function from dual vectors to dual vectors and wraps it in an overloaded
---    function whose two definitions (1) go from double vectors to double vectors and
---    (2) go from double vectors to double vectors with an added Jacobian.
+-- Takes a function (or macro) from dual vectors to dual vectors and wraps it in a macro
+--    that behaves like an overloaded function with two definitions: (1) from double
+--    vectors to double vectors and (2) from double vectors to double vectors with an added Jacobian.
 local function wrapDualFn(fn)
-	-- Full version, with Jacobian and everything
-	local terra wrappedFn(x: &Vector(double), y: &Vector(double), J: &Grid2D(double))
-		var x_dual = [Vector(ad.num)].stackAlloc(x.size, 0.0)
-		for i=0,x.size do x_dual(i) = ad.num(x(i)) end
-		var y_dual = [Vector(ad.num)].stackAlloc()
-		fn(&x_dual, &y_dual)
-		y:resize(y_dual.size)
-		for i=0,y.size do y(i) = ad.val(y_dual(i)) end
-		ad.jacobian(&y_dual, &x_dual, J)
-		m.destruct(x_dual)
-		m.destruct(y_dual)
-	end
-	-- Simple version that just executes the primal version and throws away
-	--    the tape.
-	terra wrappedFn(x: &Vector(double), y: &Vector(double))
-		var x_dual = [Vector(ad.num)].stackAlloc(x.size, 0.0)
-		for i=0,x.size do x_dual(i) = ad.num(x(i)) end
-		var y_dual = [Vector(ad.num)].stackAlloc()
-		fn(&x_dual, &y_dual)
-		y:resize(y_dual.size)
-		for i=0,y.size do y(i) = ad.val(y_dual(i)) end
-		ad.recoverMemory()
-	end
-
-	return wrappedFn
+	return macro(function(...)
+		local args = {...}
+		local numargs = select("#", ...)
+		assert(numargs == 2 or numargs == 3)
+		local x = args[1]
+		local y = args[2]
+		local J = args[3]
+		return quote
+			var x_dual = [Vector(ad.num)].stackAlloc(x.size, 0.0)
+			for i=0,x.size do x_dual(i) = ad.num(x(i)) end
+			var y_dual = [Vector(ad.num)].stackAlloc()
+			fn(&x_dual, &y_dual)
+			y:resize(y_dual.size)
+			for i=0,y.size do y(i) = ad.val(y_dual(i)) end
+			-- Simple version that just executes the primal version and throws away
+			--    the tape.
+			[util.optionally(numargs == 2, function() return quote
+				ad.recoverMemory()
+			end end)]
+			-- Full version, with Jacobian and everything
+			[util.optionally(numargs == 3, function() return quote
+				ad.jacobian(&y_dual, &x_dual, J)
+			end end)]
+			m.destruct(x_dual)
+			m.destruct(y_dual)
+		end
+	end)
 end
 
 
@@ -61,6 +63,7 @@ local ReturnCodes =
 --    		   vector of output doubles.
 --    - #2: Takes a vector of input doubles and fills in a
 --    		   vector of output doubles as well as an output Jacobian grid.
+--    F can also be a macro that behaves in this way.
 -- linsolver: Function that solves the linear system Ax = b, taking a grid A and a vector b and
 --    fills in a vector x. Can be a fully-determined solve or a least-squares/min-norm solve.
 function newton(F, linsolver, convergeThresh, maxIters)
@@ -523,10 +526,10 @@ local _module =
 
 -- print("Testing simple newton solver...")
 -- tests(newton)()
--- print("Testing backtracking newton solver...")
--- tests(backtrackingNewton)()
--- print("Testing simple backtracking newton solver...")
--- tests(simpleBacktrackingNewton)()
+-- -- print("Testing backtracking newton solver...")
+-- -- tests(backtrackingNewton)()
+-- -- print("Testing simple backtracking newton solver...")
+-- -- tests(simpleBacktrackingNewton)()
 -- print("Done")
 
 -------------------------
