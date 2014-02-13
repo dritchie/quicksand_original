@@ -8,7 +8,7 @@ spec.addParam("structureChange", true)
 spec.addParam("factorEval", true)
 spec.addParam("doingInference", false)
 spec.addParam("scalarType", double)
-spec.addParam("relaxManifold", false)
+spec.addParam("relaxManifolds", false)
 -----------------------------------
 
 -- Add all the 'global' exports from the module named 'name'

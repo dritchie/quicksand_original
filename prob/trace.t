@@ -675,7 +675,7 @@ local manifold = spec.specializable(function(...)
 	local factorEval = spec.paramFromList("factorEval", ...)
 	local doingInference = spec.paramFromList("doingInference", ...)
 	local scalarType = spec.paramFromList("scalarType", ...)
-	local relaxManifold = spec.paramFromList("relaxManifold", ...)
+	local relaxManifolds = spec.paramFromList("relaxManifolds", ...)
 	local globTrace = globalTrace(scalarType)
 	return macro(function(num, softness)
 		-- Do not generate any code if we're compiling a specialization
@@ -686,7 +686,7 @@ local manifold = spec.specializable(function(...)
 		end
 		-- Otherwise, what we do depends on whether we're relaxing
 		--    manifolds or not.
-		if relaxManifold then
+		if relaxManifolds then
 			if not softness then
 				error("Need to provide softness parameter for manifold relaxation")
 			else
