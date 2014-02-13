@@ -479,12 +479,9 @@ return
 {
 	MCMCKernel = MCMCKernel,
 	MultiKernel = MultiKernel,
-	types = 
-	{
-		ReturnType = ReturnType,
-		SampleType = SampleType,
-		SampleVectorType = SampleVectorType
-	},
+	ReturnType = ReturnType,
+	SampleType = SampleType,
+	SampleVectorType = SampleVectorType,
 	extractReturnValue = extractReturnValue,
 	mcmcSample = mcmcSample,
 	globals = {
