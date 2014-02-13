@@ -471,18 +471,18 @@ return
 {
 	MCMCKernel = MCMCKernel,
 	MultiKernel = MultiKernel,
+	types = 
+	{
+		ReturnType = ReturnType,
+		SampleType = SampleType,
+		SampleVectorType = SampleVectorType
+	},
+	mcmcSample = mcmcSample,
 	globals = {
 		RandomWalk = RandomWalk,
 		GaussianDrift = GaussianDrift,
 		Schedule = Schedule,
-		types = 
-		{
-			ReturnType = ReturnType,
-			SampleType = SampleType,
-			SampleVectorType = SampleVectorType
-		},
 		forwardSample = forwardSample,
-		mcmcSample = mcmcSample,
 		mcmc = mcmc,
 		rejectionSample = rejectionSample,
 		mean = mean,

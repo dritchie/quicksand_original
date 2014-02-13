@@ -194,6 +194,39 @@ BaseTrace = templatize(function(ProbType)
 		return fvars
 	end
 
+	-- A set of utilities for getting/setting the non-structural, continuous variables
+	--    in a trace (I got tired of typing out repeated boilerplate)
+	terra BaseTraceT:getNonStructuralReals(v: &Vector(ProbType))
+		var nonstructs = self:freeVars(false, true)
+		for i=0,nonstructs.size do
+			nonstructs(i):getRealComponents(v)
+		end
+		m.destruct(nonstructs)
+	end
+	terra BaseTraceT:getRawNonStructuralReals(v: &Vector(ProbType))
+		var nonstructs = self:freeVars(false, true)
+		for i=0,nonstructs.size do
+			nonstructs(i):getRawRealComponents(v)
+		end
+		m.destruct(nonstructs)
+	end
+	terra BaseTraceT:setNonStructuralReals(v: &Vector(ProbType))
+		var nonstructs = self:freeVars(false, true)
+		var index = 0U
+		for i=0,nonstructs.size do
+			nonstructs(i):setRealComponents(v, &index)
+		end
+		m.destruct(nonstructs)
+	end
+	terra BaseTraceT:setRawNonStructuralReals(v: &Vector(ProbType))
+		var nonstructs = self:freeVars(false, true)
+		var index = 0U
+		for i=0,nonstructs.size do
+			nonstructs(i):setRawRealComponents(v, &index)
+		end
+		m.destruct(nonstructs)
+	end
+
 	BaseTraceT.traceUpdate = virtualTemplate(BaseTraceT, "traceUpdate", function(...) return {}->{} end)
 
 	BaseTraceT.setLogprobFrom = virtualTemplate(BaseTraceT, "setLogprobFrom", function(P) return {&BaseTrace(P)}->{} end)
@@ -237,7 +270,8 @@ GlobalTrace = templatize(function(ProbType)
 		varlist: Vector(&RVar),
 		loopcounters: HashMap(IdSeq, int),
 		lastVarList: &Vector(&RVar),
-		currVarIndex: uint
+		currVarIndex: uint,
+		manifolds: Vector(double)
 	}
 	inheritance.dynamicExtend(ParentClass, GlobalTraceT)
 
@@ -246,7 +280,8 @@ GlobalTrace = templatize(function(ProbType)
 		self.vars = [HashMap(IdSeq, Vector(&RVar))].stackAlloc()
 		self.varlist = [Vector(&RVar)].stackAlloc()
 		self.loopcounters = [HashMap(IdSeq, int)].stackAlloc()
-		self.lastVarList = nil	
+		self.lastVarList = nil
+		m.init(self.manifolds)
 	end
 
 	GlobalTraceT.__templatecopy = templatize(function(P)
@@ -274,6 +309,12 @@ GlobalTrace = templatize(function(ProbType)
 				self.varlist:set(i, @(old2new:getPointer(other.varlist:get(i))))
 			end
 			m.destruct(old2new)
+			-- Copy manifolds (if any)
+			m.init(self.manifolds)
+			self.manifolds:resize(other.manifolds.size)
+			for i=0,other.manifolds.size do
+				self.manifolds(i) = other.manifolds(i)
+			end
 		end
 	end)
 
@@ -281,6 +322,7 @@ GlobalTrace = templatize(function(ProbType)
 		m.destruct(self.vars)
 		m.destruct(self.varlist)
 		m.destruct(self.loopcounters)
+		m.destruct(self.manifolds)
 	end
 	inheritance.virtual(GlobalTraceT, "__destruct")
 
@@ -347,6 +389,11 @@ GlobalTrace = templatize(function(ProbType)
 		-- C.printf("add factor: %g, lp = %g\n", ad.val(num), ad.val(self.logprob))
 	end
 	util.inline(GlobalTraceT.methods.factor)
+
+	terra GlobalTraceT:manifold(num: ProbType)
+		self.manifolds:push(num)
+	end
+	util.inline(GlobalTraceT.methods.manifold)
 
 	terra GlobalTraceT:condition(cond: bool)
 		self.conditionsSatisfied = self.conditionsSatisfied and cond
@@ -620,6 +667,24 @@ local factor = spec.specializable(function(...)
 			return quote end
 		end
 		return `globTrace:factor(num)
+	end)
+end)
+
+-- TODO: specialization parameter for relaxing manifolds into tight factors.
+-- (macro could take an optional second parameter for tightness)
+local manifold = spec.specializable(function(...)
+	local factorEval = spec.paramFromList("factorEval", ...)
+	local doingInference = spec.paramFromList("doingInference", ...)
+	local scalarType = spec.paramFromList("scalarType", ...)
+	local globTrace = globalTrace(scalarType)
+	return macro(function(num)
+		-- Do not generate any code if we're compiling a specialization
+		--    without factor evaluation, or if we're running the code outside of
+		--    an inference engine
+		if not doingInference or not factorEval then
+			return quote end
+		end
+		return `globTrace:manifold(num)
 	end)
 end)
 
