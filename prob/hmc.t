@@ -14,6 +14,9 @@ local Vector = terralib.require("vector")
 local util = terralib.require("util")
 local larj = terralib.require("prob.larj")
 local DualAverage = terralib.require("prob.dualAverage")
+local Grid2D = terralib.require("grid").Grid2D
+local linsolve = terralib.require("linsolve")
+local newton = terralib.require("newton")
 
 local C = terralib.includecstring [[
 #include <stdio.h>
@@ -26,12 +29,15 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 									  temperAcceptHamiltonian, temperGuideHamiltonian,
 									  temperInitialMomentum,
 									  tempTrajectoryMult,
+									  constrainToManifold,
 									  relaxManifolds,
 									  pmrAlpha, verbosity)
+
 	local doTemperedTrajectories = tempTrajectoryMult ~= 1.0
 	local sqrtTemperingMult = math.sqrt(tempTrajectoryMult)
 	local doingPMR = pmrAlpha > 0.0
 	local targetAcceptRate = (numSteps == 1) and 0.57 or 0.65
+
 	local struct HMCKernelT
 	{
 		stepSize: double,
@@ -119,34 +125,32 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		return lp
 	end
 
-	-- TODO: The updates in this function are a good candidate for vectorized multiply/add.
-	terra HMCKernelT:leapfrog(pos: &Vector(double), grad: &Vector(double))
-		-- C.printf("Initial pos:\n")
-		-- for i=0,pos.size do C.printf("%g\n", pos(i)) end
-		-- C.printf("Initial grad:\n")
-		-- for i=0,grad.size do C.printf("%g\n", grad(i)) end
-		-- Momentum update (first half)
-		for i=0,self.momenta.size do
-			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
+	if constrainToManifold then
+		-- Use RATTLE integrator
+		terra HMCKernelT:integratorStep(pos: &Vector(double), grad: &Vector(double))
+			--
 		end
-		-- Position update
-		for i=0,pos.size do
-			pos:set(i, pos:get(i) + self.stepSize*self.momenta:get(i)*self.invMasses:get(i))
+	else
+		-- Use Leapfrog integrator
+		terra HMCKernelT:integratorStep(pos: &Vector(double), grad: &Vector(double))
+			-- Momentum update (first half)
+			for i=0,self.momenta.size do
+				self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
+			end
+			-- Position update
+			for i=0,pos.size do
+				pos:set(i, pos:get(i) + self.stepSize*self.momenta:get(i)*self.invMasses:get(i))
+			end
+			-- Momentum update (second half)
+			var lp = self:logProbAndGrad(pos, grad)
+			for i=0,self.momenta.size do
+				self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
+			end
+			return lp
 		end
-		-- Momentum update (second half)
-		var lp = self:logProbAndGrad(pos, grad)
-		-- C.printf("Midpoint pos:\n")
-		-- for i=0,pos.size do C.printf("%g\n", pos(i)) end
-		-- C.printf("Midpoint grad:\n")
-		-- for i=0,grad.size do C.printf("%g\n", grad(i)) end
-		for i=0,self.momenta.size do
-			self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
-		end
-
-		return lp
 	end
 
-	terra HMCKernelT:sampleMomentaRaw()
+	terra HMCKernelT:sampleNewMomentaRaw()
 		self.momenta:resize(self.positions.size)
 		for i=0,self.momenta.size do
 			var m = [rand.gaussian_sample(double)](0.0, 1.0) * self.invMasses:get(i)
@@ -154,12 +158,34 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end
 	end
 
+	if constrainToManifold then
+		terra HMCKernelT:sampleNewMomenta()
+			-- Get the current constraint Jacobian
+			var pos = [Vector(double)].stackAlloc()
+			self.lastTrace:getRawNonStructuralReals(&pos)
+			var dualpos = [Vector(ad.num)].stackAlloc(pos.size, 0.0)
+			for i=0,pos.size do dualpos(i) = ad.num(pos(i)) end
+			m.destruct(pos)
+			self.adTrace:setRawNonStructuralReals(&dualpos)
+			[trace.traceUpdate({structureChange=false})](self.adTrace)
+			var globTrace = [&trace.GlobalTrace(ad.num)](self.adTrace)
+			var J = [Grid2D(double)].stackAlloc(globTrace.manifolds.size, dualpos.size)
+			ad.jacobian(&globTrace.manifolds, &dualpos, &J)
+			m.destruct(dualpos)
+			-- Sample new momenta, project onto manifold cotangent bundle
+			linsolve.nullSpaceProjection(&J, &self.momenta, &self.momenta)
+			m.destruct(J)
+		end
+	else
+		HMCKernelT.methods.sampleNewMomenta = HMCKernelT.methods.sampleNewMomentaRaw
+	end
+
 	if doingPMR then
 		terra HMCKernelT:sampleMomenta()
 			-- Can't do a partial update if we don't yet have an existing
 			--    set of momenta at this dimensionality
 			if self.momenta.size ~= self.positions.size then
-				self:sampleMomentaRaw()
+				self:sampleNewMomenta()
 			-- Otherwise, do a partial update
 			else
 				var coeff = ad.math.sqrt(1.0 - pmrAlpha*pmrAlpha)
@@ -170,7 +196,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			end
 		end
 	else
-		HMCKernelT.methods.sampleMomenta = HMCKernelT.methods.sampleMomentaRaw
+		HMCKernelT.methods.sampleMomenta = HMCKernelT.methods.sampleNewMomenta
 	end
 
 	terra HMCKernelT:kineticEnergy()
@@ -194,7 +220,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		var grad = m.copy(self.gradient)
 		self:sampleMomenta()
 		var lastlp = self.adTrace.logprob:val()
-		var lp = self:leapfrog(&pos, &grad)
+		var lp = self:integratorStep(&pos, &grad)
 		var H = lp - lastlp
 		var direction = -1
 		if H > ad.math.log(0.5) then direction = 1 end
@@ -209,7 +235,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			pos = m.copy(self.positions)
 			grad = m.copy(self.gradient)
 			self:sampleMomenta()
-			lp = self:leapfrog(&pos, &grad)
+			lp = self:integratorStep(&pos, &grad)
 			H = lp - lastlp
 			-- If our initial step improved the posterior by more than 0.5, then
 			--    keep doubling step size until the initial step improves by as
@@ -380,6 +406,24 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		--    avoid doing all this work if this kernel is repeatedly
 		--    called (and it will be).
 		self.lastTrace = currTrace
+
+		-- If doing CHMC, then verify:
+		--    * That this is an instance of GlobalTrace, and not some other
+		--      subclass of BaseTrace (i.e. manifold constraints don't make
+		--      sense for LARJ interpolation traces)
+		--    * That this trace is actually on the manifold
+		--      (i.e. there are manifold constraints and they are satisfied)
+		[util.optionally(constrainToManifold, function() return quote
+			util.assert([inheritance.isInstanceOf(trace.GlobalTrace(double))](currTrace),
+				"CHMC only defined for single execution traces (not interpolation traces)\n")
+			var globTrace = [&trace.GlobalTrace(double)](currTrace)
+			util.assert(globTrace.manifolds.size > 0,
+				"CHMC only defined when manifold constraints are used\n")
+			for i=0,globTrace.manifolds.size do
+				util.assert(ad.math.fabs(globTrace.manifolds(i)) < 1e-8,
+					"CHMC only defined when manifold constraints are satisfied\n")
+			end
+		end end)]
 	end
 
 	-- Useful utility
@@ -405,8 +449,8 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 					for j=0,self.momenta.size do self.momenta(j) = self.momenta(j) / sqrtTemperingMult end
 				end
 			end end)]
-			-- Take leapfrog step
-			newlp = self:leapfrog(pos, grad)
+			-- Simualte one time step
+			newlp = self:integratorStep(pos, grad)
 			-- Tempering post-step momentum adjustment
 			[util.optionally(doTemperedTrajectories, function() return quote
 				if 2*i > numSteps then
@@ -448,7 +492,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			H = H / currTrace.temperature
 		end end)] 
 
-		-- Do leapfrog steps
+		-- Simulate Hamiltonian dynamics trajectory
 		[util.optionally(verbosity > 0, function() return quote
 			C.printf("--- TRAJECTORY START ---\n")
 			C.printf("dimension: %u\n", self.positions.size)
@@ -560,6 +604,7 @@ end,
  {"temperAcceptHamiltonian", false}, {"temperGuideHamiltonian", false},
  {"temperInitialMomentum", false},
  {"tempTrajectoryMult", 1.0},
+ {"constrainToManifold", false},
  {"relaxManifolds", false},
  {"pmrAlpha", 0.0}, {"verbosity", 0}})
 
