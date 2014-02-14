@@ -64,6 +64,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		LARJOldComponents: Vector(int),
 		LARJNewComponents: Vector(int)
 	}
+	if constrainToManifold then
+		HMCKernelT.entries:insert({field="constraintJacobian", type=Grid2D(double)})
+	end
 	inheritance.dynamicExtend(MCMCKernel, HMCKernelT)
 
 	terra HMCKernelT:__construct()
@@ -72,20 +75,23 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		self.proposalsMade = 0
 		self.proposalsAccepted = 0
 		self.lastTrace = nil
-		self.positions = [Vector(double)].stackAlloc()
-		self.gradient = [Vector(double)].stackAlloc()
-		self.momenta = [Vector(double)].stackAlloc()
-		self.invMasses = [Vector(double)].stackAlloc()
-		self.origInvMasses = [Vector(double)].stackAlloc() 
+		m.init(self.positions)
+		m.init(self.gradient)
+		m.init(self.momenta)
+		m.init(self.invMasses)
+		m.init(self.origInvMasses)
 		self.adTrace = nil
 		self.dTrace = nil
 		m.init(self.adNonstructuralVars)
 		m.init(self.adStructuralVars)
 		m.init(self.indepVarNums)
 		self.doingLARJ = false
-		self.realCompsPerVariable = [Vector(int)].stackAlloc()
-		self.LARJOldComponents = [Vector(int)].stackAlloc()
-		self.LARJNewComponents = [Vector(int)].stackAlloc()
+		m.init(self.realCompsPerVariable)
+		m.init(self.LARJOldComponents)
+		m.init(self.LARJNewComponents)
+		[util.optionally(constrainToManifold, function() return quote
+			m.init(self.constraintJacobian)
+		end end)]
 	end
 
 	terra HMCKernelT:__destruct() : {}
@@ -103,10 +109,16 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		m.destruct(self.realCompsPerVariable)
 		m.destruct(self.LARJOldComponents)
 		m.destruct(self.LARJNewComponents)
+		[util.optionally(constrainToManifold, function() return quote
+			m.destruct(self.constraintJacobian)
+		end end)]
 	end
 	inheritance.virtual(HMCKernelT, "__destruct")
 
-	terra HMCKernelT:logProbAndGrad(pos: &Vector(double), grad: &Vector(double))
+	-- 'update' is the main function we use to update the trace and derived quantites
+	--    every time we make a tweak to the variable values
+	-- If we're not doing CHMC, then we expect jac to be nil
+	terra HMCKernelT:update(pos: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
 		self.indepVarNums:resize(pos.size)
 		for i=0,pos.size do
 			self.indepVarNums:set(i, ad.num(pos:get(i)))
@@ -121,18 +133,29 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		[util.optionally(temperGuideHamiltonian, function() return quote 
 			duallp = duallp / self.adTrace.temperature
 		end end)]
-		duallp:grad(&self.indepVarNums, grad)
+		-- If we're doing regular HMC, we just need the gradient
+		--    of lp w.r.t to pos
+		[util.optionally(not constrainToManifold, function() return quote
+			duallp:grad(&self.indepVarNums, grad)	
+		end end)]
+		-- If we're doing CHMC, then we also need the constraint jacobian
+		[util.optionally(constrainToManifold, function() return quote
+			duallp:grad(&self.indepVarNums, grad, false)
+			ad.jacobian(&([&trace.GlobalTrace(ad.num)](self.adTrace).manifolds),
+						&self.indepVarNums, jac)
+		end end)]
 		return lp
 	end
 
+	-- Integrators
 	if constrainToManifold then
-		-- Use RATTLE integrator
-		terra HMCKernelT:integratorStep(pos: &Vector(double), grad: &Vector(double))
-			--
+		-- RATTLE
+		terra HMCKernelT:integratorStep(pos: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
+			-- TODO: Fill in
 		end
 	else
-		-- Use Leapfrog integrator
-		terra HMCKernelT:integratorStep(pos: &Vector(double), grad: &Vector(double))
+		-- Leapfrog
+		terra HMCKernelT:integratorStep(pos: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
 			-- Momentum update (first half)
 			for i=0,self.momenta.size do
 				self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
@@ -142,7 +165,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 				pos:set(i, pos:get(i) + self.stepSize*self.momenta:get(i)*self.invMasses:get(i))
 			end
 			-- Momentum update (second half)
-			var lp = self:logProbAndGrad(pos, grad)
+			var lp = self:update(pos, grad, jac)
 			for i=0,self.momenta.size do
 				self.momenta:set(i, self.momenta:get(i) + 0.5*self.stepSize*grad:get(i))
 			end
@@ -218,9 +241,14 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		self.stepSize = 1.0
 		var pos = m.copy(self.positions)
 		var grad = m.copy(self.gradient)
+		var jacptr : &Grid2D(double) = nil
+		[util.optionally(constrainToManifold, function() return quote
+			var jac = m.copy(self.constraintJacobian)
+			var jacptr = &jac
+		end end)]
 		self:sampleMomenta()
 		var lastlp = self.adTrace.logprob:val()
-		var lp = self:integratorStep(&pos, &grad)
+		var lp = self:integratorStep(&pos, &grad, jacptr)
 		var H = lp - lastlp
 		var direction = -1
 		if H > ad.math.log(0.5) then direction = 1 end
@@ -231,11 +259,16 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 				C.printf("lp: %g\n", lp)
 			end end)]
 			m.destruct(pos)
-			m.destruct(grad)
 			pos = m.copy(self.positions)
+			m.destruct(grad)
 			grad = m.copy(self.gradient)
+			[util.optionally(constrainToManifold, function() return quote
+				m.destruct(jac)
+				jac = m.copy(self.constraintJacobian)
+				jacptr = &jac
+			end end)]
 			self:sampleMomenta()
-			lp = self:integratorStep(&pos, &grad)
+			lp = self:integratorStep(&pos, &grad, jacptr)
 			H = lp - lastlp
 			-- If our initial step improved the posterior by more than 0.5, then
 			--    keep doubling step size until the initial step improves by as
@@ -387,10 +420,13 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		-- Initialize the inverse masses for the HMC phase space
 		self:initInverseMasses(currTrace)
 
-		-- Initialize the gradient
-		-- C.printf("initializing logprob and gradient for HMC kernel...\n")
-		self:logProbAndGrad(&self.positions, &self.gradient)
-		-- C.printf("done initializing logprob and gradient for HMC kernel\n")
+		-- Initialize the lp gradient (and constraint jacobian)
+		[util.optionally(constrainToManifold, function() return quote
+			self:update(&self.positions, &self.gradient, &self.constraintJacobian)
+		end end)]
+		[util.optionally(not constrainToManifold, function() return quote
+			self:update(&self.positions, &self.gradient, nil)
+		end end)]
 
 		-- If the stepSize wasn't specified, try to find a decent one.
 		if self.stepSize <= 0.0 then
@@ -438,7 +474,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 
 	-- Simulate Hamiltonian dynamics for some number of steps and return the
 	-- final logprob
-	terra HMCKernelT:simulateTrajectory(pos: &Vector(double), grad: &Vector(double))
+	terra HMCKernelT:simulateTrajectory(pos: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
 		var newlp : double
 		for i=1,numSteps+1 do
 			-- Tempering pre-step momentum adjustment
@@ -450,7 +486,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 				end
 			end end)]
 			-- Simualte one time step
-			newlp = self:integratorStep(pos, grad)
+			newlp = self:integratorStep(pos, grad, jac)
 			-- Tempering post-step momentum adjustment
 			[util.optionally(doTemperedTrajectories, function() return quote
 				if 2*i > numSteps then
@@ -502,7 +538,12 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end end)]
 		var pos = m.copy(self.positions)
 		var grad = m.copy(self.gradient)
-		var newlp = self:simulateTrajectory(&pos, &grad)
+		var jacptr : &Grid2D(double) = nil
+		[util.optionally(constrainToManifold, function() return quote
+			var jac = m.copy(self.constraintJacobian)
+			jacptr = &jac
+		end end)]
+		var newlp = self:simulateTrajectory(&pos, &grad, jacptr)
 		[util.optionally(verbosity > 0, function() return quote
 			C.printf("--- TRAJECTORY END ---\n")
 			C.printf("finalLP: %g              \n", newlp)
@@ -543,9 +584,13 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		if accept then
 			self.proposalsAccepted = self.proposalsAccepted + 1
 			m.destruct(self.positions)
-			m.destruct(self.gradient)
 			self.positions = pos
+			m.destruct(self.gradient)
 			self.gradient = grad
+			[util.optionally(constrainToManifold, function() return quote
+				m.destruct(self.constraintJacobian)
+				self.constraintJacobian = jac
+			end end)]
 			-- Copy final reals back into currTrace, flush trace to reconstruct
 			-- return value
 			copyNonstructRealsIntoTrace(&self.positions, currTrace)
@@ -563,6 +608,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		else
 			m.destruct(pos)
 			m.destruct(grad)
+			[util.optionally(constrainToManifold, function() return quote
+				m.destruct(jac)
+			end end)]
 			[util.optionally(verbosity > 0, function() return quote
 				C.printf("REJECT\n")
 			end end )]
