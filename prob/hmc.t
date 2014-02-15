@@ -149,21 +149,34 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 
 	-- Integrators
 	if constrainToManifold then
-		-- RATTLE
-		terra HMCKernelT:integratorStep(pos: &Vector(double), mom: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
-			-- -- First, solve nonlinear system:
-			-- --   p1/2 = p0 - step/2 * ( grad0 + J0^T*lambda )
-			-- --   q1   = q0 + step * (p1/2 / M)
-			-- --   0    = c(q1)
+		-- -- RATTLE
+		-- local function makeNewtonFunction(adTrace, p0, q0, grad0, J0)
+		-- 	return newton.wrapDualFn(macro(function(x, y)
+		-- 		return quote
+		-- 			y.resize(x.size)
+		-- 			var lambda
+		-- 			var j0transposeLambda = [Vector(double)].stackAlloc()
+		-- 		end
+		-- 	end))
+		-- end
+		-- terra HMCKernelT:integratorStep(pos: &Vector(double), mom: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
+		-- 	-- First, solve nonlinear system:
+		-- 	--   p1/2 = p0 - step/2 * ( grad0 + J0^T*lambda )
+		-- 	--   q1   = q0 + step * (p1/2 / M)
+		-- 	--   0    = c(q1)
 
-			-- -- Pack the solution vector as: p1/2, q1, lambda
-			-- var totalVecSize = pos.size + pos.size + jac.rows
-			-- var x = [Vector(double)].stackAlloc(totalVecSize, 0.0)
+		-- 	-- Pack the solution vector as: p1/2, q1, lambda
+		-- 	var totalVecSize = pos.size + pos.size + jac.rows
+		-- 	var x = [Vector(double)].stackAlloc(totalVecSize, 0.0)
+		-- 	-- Use p0, q0, 0 as initial guess
+		-- 	for i=0,mom.size do x(i) = mom(i) end
+		-- 	for i=0,pos.size do x(mom.size + i) = pos(i) end
+		-- 	[newton.newtonFullRankGeneral(makeNewtonFunction(`self.adTrace, mom, pos, grad, jac))](&x)
 
-			-- -- Then, solve linear system:
-			-- --   p1   = p1/2 - step/2 * ( grad1 + J1^T*mu )
-			-- --   0    = J1 * (p1 / M)
-		end
+		-- 	-- Then, solve linear system:
+		-- 	--   p1   = p1/2 - step/2 * ( grad1 + J1^T*mu )
+		-- 	--   0    = J1 * (p1 / M)
+		-- end
 	else
 		-- Leapfrog
 		terra HMCKernelT:integratorStep(pos: &Vector(double), mom: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
@@ -400,6 +413,12 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 	end
 
 	terra HMCKernelT:initWithNewTrace(currTrace: &BaseTraceD)
+		-- If we're relaxing manifolds, make sure the logprob of the trace
+		--    we start with reflects that (or we won't ever make any progress)
+		[util.optionally(relaxManifolds, function() return quote
+			[trace.traceUpdate({structureChange=false, relaxManifolds=true})](currTrace)
+		end end)]
+
 		-- Get the real components of currTrace variables
 		self.positions:clear()
 		self.realCompsPerVariable:clear()

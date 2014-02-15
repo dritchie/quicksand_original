@@ -56,9 +56,6 @@ local function newtonPlusHMCManifoldProjection(computation, hmcKernelParams, mcm
 	hmcKernelParams.relaxManifolds = true
 	local maxIters = maxTotalSamps / mcmcParams.numsamps
 	return terra(currTrace: &trace.BaseTrace(double), samples: &inf.SampleVectorType(computation))
-		-- The initial trace needs to use a relaxed manifold, because the hmc will, and if we don't
-		--    do this, then probably none of the hmc proposals will be accepted
-		[trace.traceUpdate({structureChange=false, relaxManifolds=true})](currTrace)
 		var kernel = [HMC(hmcKernelParams)()]
 		var retcode = newton.ReturnCodes.DidNotConverge
 		[util.optionally(mcmcParams.verbose, function() return quote
