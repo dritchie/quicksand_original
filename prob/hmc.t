@@ -156,13 +156,13 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		local function makeNewtonFunction(self, p0, q0, grad0, J0)
 			return newton.wrapDualFn(macro(function(x, y)
 				return quote
-					y.resize(x.size)
-					var nvars = p0.size
+					y:resize(x.size)
+					var nvars = q0.size
 					var nconstrs = J0.rows
 					-- Extract lambda, compute J0^T * lambda
-					var lam = [Vector(ad.num)].stackAlloc(nconstrs)
+					var lam = [Vector(ad.num)].stackAlloc(nconstrs, 0.0)
 					for i=0,lam.size do lam(i) = lambda(x, nvars, i) end
-					var j0transposeLambda = [Vector(ad.num)].stackAlloc(J0.cols)
+					var j0transposeLambda = [Vector(ad.num)].stackAlloc(J0.cols, 0.0)
 					for i=0,J0.cols do
 						var sum = ad.num(0.0)
 						for j=0,J0.rows do
@@ -176,10 +176,10 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 					end
 					-- Compute equation 2
 					for i=0,q0.size do
-						q1(y, nvars, i) = q0(i) + self.stepsize * pHalf(x, nvars, i) * self.invMasses(i) - q1(x, nvars, i)
+						q1(y, nvars, i) = q0(i) + self.stepSize * pHalf(x, nvars, i) * self.invMasses(i) - q1(x, nvars, i)
 					end
 					-- Update the trace so we can get c(q1)
-					var qOne = [Vector(ad.num)].stackAlloc(nvars)
+					var qOne = [Vector(ad.num)].stackAlloc(nvars, 0.0)
 					for i=0,q0.size do
 						qOne(i) = q1(x, nvars, i)
 					end
@@ -221,14 +221,14 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			--   | 0                     | = |  J1/m   0            | * | mu |
 
 			-- Extract q1 into pos
-			for i=0,q0.size do
+			for i=0,nvars do
 				pos(i) = q1(x, nvars, i)
 			end
 			-- Compute grad1 and J1
-			self:update(pos, grad, jac)
+			var lp = self:update(pos, grad, jac)
 			-- Set up b vector
 			var b = [Vector(double)].stackAlloc(nvars + nconstrs, 0.0)
-			for i=0,nvars do p1(b, nvars, i) = -pHalf(x, nvars, i) + self.stepSize/2.0 * gradOne(i) end
+			for i=0,nvars do p1(b, nvars, i) = -pHalf(x, nvars, i) + self.stepSize/2.0 * grad(i) end
 			-- Set up A matrix
 			var A = [Grid2D(double)].stackAlloc(b.size, b.size, 0.0)
 			for i=0,nvars do
@@ -251,6 +251,8 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			m.destruct(x)
 			m.destruct(b)
 			m.destruct(A)
+
+			return lp
 		end
 	else
 		-- Leapfrog
@@ -281,22 +283,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 
 	if constrainToManifold then
 		terra HMCKernelT:sampleNewMomenta(mom: &Vector(double))
-			-- Get the current constraint Jacobian
-			var pos = [Vector(double)].stackAlloc()
-			self.lastTrace:getRawNonStructuralReals(&pos)
-			var dualpos = [Vector(ad.num)].stackAlloc(pos.size, 0.0)
-			for i=0,pos.size do dualpos(i) = ad.num(pos(i)) end
-			m.destruct(pos)
-			self.adTrace:setRawNonStructuralReals(&dualpos)
-			[trace.traceUpdate({structureChange=false})](self.adTrace)
-			var globTrace = [&trace.GlobalTrace(ad.num)](self.adTrace)
-			var J = [Grid2D(double)].stackAlloc(globTrace.manifolds.size, dualpos.size)
-			ad.jacobian(&globTrace.manifolds, &dualpos, &J)
-			m.destruct(dualpos)
 			-- Sample new momenta, project onto manifold cotangent bundle
 			self:sampleNewMomentaRaw(mom)
-			linsolve.nullSpaceProjection(&J, mom, mom)
-			m.destruct(J)
+			linsolve.nullSpaceProjection(&self.constraintJacobian, mom, mom)
 		end
 	else
 		HMCKernelT.methods.sampleNewMomenta = HMCKernelT.methods.sampleNewMomentaRaw
@@ -341,10 +330,12 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		var pos = m.copy(self.positions)
 		var grad = m.copy(self.gradient)
 		var mom = [Vector(double)].stackAlloc()
+		var jac = [Grid2D(double)].stackAlloc()
 		var jacptr : &Grid2D(double) = nil
 		[util.optionally(constrainToManifold, function() return quote
-			var jac = m.copy(self.constraintJacobian)
-			var jacptr = &jac
+			m.destruct(jac)
+			jac = m.copy(self.constraintJacobian)
+			jacptr = &jac
 		end end)]
 		self:sampleNewMomenta(&mom)
 		var lastlp = self.adTrace.logprob:val()
@@ -405,6 +396,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		m.destruct(pos)
 		m.destruct(grad)
 		m.destruct(mom)
+		m.destruct(jac)
 	end
 
 	-- Code adapted from Stan
@@ -488,11 +480,16 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 	end
 
 	terra HMCKernelT:initWithNewTrace(currTrace: &BaseTraceD)
-		-- If we're relaxing manifolds, make sure the logprob of the trace
-		--    we start with reflects that (or we won't ever make any progress)
-		[util.optionally(relaxManifolds, function() return quote
-			[trace.traceUpdate({structureChange=false, relaxManifolds=true})](currTrace)
-		end end)]
+		-- Remember that this is the last trace we saw, so we can
+		--    avoid doing all this work if this kernel is repeatedly
+		--    called (and it will be).
+		self.lastTrace = currTrace
+
+		-- Make sure currTrace starts out reflecting the correct
+		--    relaxManifolds status
+		if [inheritance.isInstanceOf(trace.GlobalTrace(double))](currTrace) then
+			[trace.traceUpdate({structureChange=false, relaxManifolds=relaxManifolds})](currTrace)
+		end
 
 		-- Get the real components of currTrace variables
 		self.positions:clear()
@@ -548,11 +545,6 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			self.adapter = DualAverage.heapAlloc(self.stepSize, adaptationRate)
 		end
 
-		-- Remember that this is the last trace we saw, so we can
-		--    avoid doing all this work if this kernel is repeatedly
-		--    called (and it will be).
-		self.lastTrace = currTrace
-
 		-- If doing CHMC, then verify:
 		--    * That this is an instance of GlobalTrace, and not some other
 		--      subclass of BaseTrace (i.e. manifold constraints don't make
@@ -565,10 +557,14 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			var globTrace = [&trace.GlobalTrace(double)](currTrace)
 			util.assert(globTrace.manifolds.size > 0,
 				"CHMC only defined when manifold constraints are used\n")
+			var thresh = 1e-8
+			var mnorm = 0.0
 			for i=0,globTrace.manifolds.size do
-				util.assert(ad.math.fabs(globTrace.manifolds(i)) < 1e-8,
-					"CHMC only defined when manifold constraints are satisfied\n")
+				var mval = globTrace.manifolds(i)
+				mnorm = mnorm + mval*mval				
 			end
+			util.assert(mnorm < thresh,
+				"CHMC only defined when manifold constraints are satisfied; manifold norm was %g (greater than threshold %g)\n", mnorm, thresh)
 		end end)]
 	end
 
@@ -649,9 +645,11 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		end end)]
 		var pos = m.copy(self.positions)
 		var grad = m.copy(self.gradient)
+		var jac = [Grid2D(double)].stackAlloc()
 		var jacptr : &Grid2D(double) = nil
 		[util.optionally(constrainToManifold, function() return quote
-			var jac = m.copy(self.constraintJacobian)
+			m.destruct(jac)
+			jac = m.copy(self.constraintJacobian)
 			jacptr = &jac
 		end end)]
 		var newlp = self:simulateTrajectory(&pos, &mom, &grad, jacptr)
@@ -704,6 +702,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 				m.destruct(self.constraintJacobian)
 				self.constraintJacobian = jac
 			end end)]
+			[util.optionally(not constrainToManifold, function() return quote
+				m.destruct(jac)
+			end end)]
 			-- Copy final reals back into currTrace, flush trace to reconstruct
 			-- return value
 			copyNonstructRealsIntoTrace(&self.positions, currTrace)
@@ -722,9 +723,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			m.destruct(pos)
 			m.destruct(grad)
 			m.destruct(mom)
-			[util.optionally(constrainToManifold, function() return quote
-				m.destruct(jac)
-			end end)]
+			m.destruct(jac)
 			[util.optionally(verbosity > 0, function() return quote
 				C.printf("REJECT\n")
 			end end )]
