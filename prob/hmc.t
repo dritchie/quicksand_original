@@ -149,34 +149,109 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 
 	-- Integrators
 	if constrainToManifold then
-		-- -- RATTLE
-		-- local function makeNewtonFunction(adTrace, p0, q0, grad0, J0)
-		-- 	return newton.wrapDualFn(macro(function(x, y)
-		-- 		return quote
-		-- 			y.resize(x.size)
-		-- 			var lambda
-		-- 			var j0transposeLambda = [Vector(double)].stackAlloc()
-		-- 		end
-		-- 	end))
-		-- end
-		-- terra HMCKernelT:integratorStep(pos: &Vector(double), mom: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
-		-- 	-- First, solve nonlinear system:
-		-- 	--   p1/2 = p0 - step/2 * ( grad0 + J0^T*lambda )
-		-- 	--   q1   = q0 + step * (p1/2 / M)
-		-- 	--   0    = c(q1)
+		-- RATTLE
+		local pHalf = macro(function(x, nvars, i) return `x(i) end)
+		local q1 = macro(function(x, nvars, i) return `x(nvars + i) end)
+		local lambda = macro(function(x, nvars, i) return `x(2*nvars + i) end)
+		local function makeNewtonFunction(self, p0, q0, grad0, J0)
+			return newton.wrapDualFn(macro(function(x, y)
+				return quote
+					y.resize(x.size)
+					var nvars = p0.size
+					var nconstrs = J0.rows
+					-- Extract lambda, compute J0^T * lambda
+					var lam = [Vector(ad.num)].stackAlloc(nconstrs)
+					for i=0,lam.size do lam(i) = lambda(x, nvars, i) end
+					var j0transposeLambda = [Vector(ad.num)].stackAlloc(J0.cols)
+					for i=0,J0.cols do
+						var sum = ad.num(0.0)
+						for j=0,J0.rows do
+							sum = sum + J0(j,i)*lam(j)
+						end
+						j0transposeLambda(i) = sum
+					end
+					-- Compute equation 1
+					for i=0,p0.size do
+						pHalf(y, nvars, i) = p0(i) - 0.5*self.stepSize * (grad0(i) + j0transposeLambda(i)) - pHalf(x, nvars, i)
+					end
+					-- Compute equation 2
+					for i=0,q0.size do
+						q1(y, nvars, i) = q0(i) + self.stepsize * pHalf(x, nvars, i) * self.invMasses(i) - q1(x, nvars, i)
+					end
+					-- Update the trace so we can get c(q1)
+					var qOne = [Vector(ad.num)].stackAlloc(nvars)
+					for i=0,q0.size do
+						qOne(i) = q1(x, nvars, i)
+					end
+					self.adTrace:setRawNonStructuralReals(&qOne)
+					[trace.traceUpdate({structureChange=false})](self.adTrace)
+					-- Compute equation 3
+					var globTrace = [&trace.GlobalTrace(ad.num)](self.adTrace)
+					for i=0,globTrace.manifolds.size do
+						lambda(y, nvars, i) = globTrace.manifolds(i)
+					end
+					m.destruct(lam)
+					m.destruct(j0transposeLambda)
+					m.destruct(qOne)
+				end
+			end))
+		end
+		local p1 = macro(function(x, nvars, i) return `x(i) end)
+		local mu = macro(function(x, nvars, i) return `x(nvars + i) end)
+		terra HMCKernelT:integratorStep(pos: &Vector(double), mom: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
+			-- First, solve nonlinear system:
+			--   (1) 0 = p0 - step/2 * ( grad0 + J0^T*lambda ) - p1/2
+			--   (2) 0 = q0 + step * (p1/2 / m) - q1
+			--   (3) 0 = c(q1)
 
-		-- 	-- Pack the solution vector as: p1/2, q1, lambda
-		-- 	var totalVecSize = pos.size + pos.size + jac.rows
-		-- 	var x = [Vector(double)].stackAlloc(totalVecSize, 0.0)
-		-- 	-- Use p0, q0, 0 as initial guess
-		-- 	for i=0,mom.size do x(i) = mom(i) end
-		-- 	for i=0,pos.size do x(mom.size + i) = pos(i) end
-		-- 	[newton.newtonFullRankGeneral(makeNewtonFunction(`self.adTrace, mom, pos, grad, jac))](&x)
+			-- Pack the solution vector as: p1/2, q1, lambda
+			var nvars = pos.size 
+			var nconstrs = jac.rows
+			var x = [Vector(double)].stackAlloc(nvars + nvars + nconstrs, 0.0)
+			-- Use p0, q0, 0 as initial guess
+			for i=0,nvars do pHalf(x, nvars, i) = mom(i) end
+			for i=0,nvars do q1(x, nvars, i) = pos(i) end
+			[newton.newtonLeastSquares(makeNewtonFunction(self, mom, pos, grad, jac))](&x)
 
-		-- 	-- Then, solve linear system:
-		-- 	--   p1   = p1/2 - step/2 * ( grad1 + J1^T*mu )
-		-- 	--   0    = J1 * (p1 / M)
-		-- end
+			-- Then, solve linear system:
+			--   (1) p1 = p1/2 - step/2 * ( grad1 + J1^T*mu )
+			--   (2) 0  = J1 * (p1 / m)
+			-- As a matrix equation b = Ax, this is expressed as:
+			--   | -p1/2 + step2 * grad1 | = | -I      -step/2*J1^T | * | p1 |
+			--   | 0                     | = |  J1/m   0            | * | mu |
+
+			-- Extract q1 into pos
+			for i=0,q0.size do
+				pos(i) = q1(x, nvars, i)
+			end
+			-- Compute grad1 and J1
+			self:update(pos, grad, jac)
+			-- Set up b vector
+			var b = [Vector(double)].stackAlloc(nvars + nconstrs, 0.0)
+			for i=0,nvars do p1(b, nvars, i) = -pHalf(x, nvars, i) + self.stepSize/2.0 * gradOne(i) end
+			-- Set up A matrix
+			var A = [Grid2D(double)].stackAlloc(b.size, b.size, 0.0)
+			for i=0,nvars do
+				-- -I block
+				A(i,i) = -1.0
+			end
+			for i=0,jac.rows do
+				for j=0,jac.cols do
+					-- -step/2*J1^T block
+					A(j, nvars + i) = -0.5*self.stepSize*jac(i,j)
+					-- J1/m block
+					A(nvars + i, j) = jac(i,j)*self.invMasses(j)
+				end
+			end
+			-- Solve
+			linsolve.leastSquares(&A, &b, &x)
+			-- Extract p1 into mom
+			for i=0,nvars do mom(i) = p1(x, nvars, i) end
+
+			m.destruct(x)
+			m.destruct(b)
+			m.destruct(A)
+		end
 	else
 		-- Leapfrog
 		terra HMCKernelT:integratorStep(pos: &Vector(double), mom: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
