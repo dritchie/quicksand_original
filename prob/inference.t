@@ -421,9 +421,9 @@ end
 -- Value type must define + and scalar division
 local mean = macro(function(vals)
 	return quote
-		var m = m.copy(vals:get(0))
+		var m = m.copy(vals(0))
 		for i=1,vals.size do
-			m = m + vals:get(i)
+			m = m + vals(i)
 		end
 		m = m / [double](vals.size)
 	in
@@ -435,9 +435,9 @@ end)
 -- The value type must define + and scalar division
 local expectation = macro(function(samps)
 	return quote
-		var m = m.copy(samps:get(0).value)
+		var m = m.copy(samps(0).value)
 		for i=1,samps.size do
-			m = m + samps:get(i).value
+			m = m + samps(i).value
 		end
 		m = m / [double](samps.size)
 	in

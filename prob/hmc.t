@@ -211,7 +211,8 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			-- Use p0, q0, 0 as initial guess
 			for i=0,nvars do pHalf(x, nvars, i) = mom(i) end
 			for i=0,nvars do q1(x, nvars, i) = pos(i) end
-			[newton.newtonLeastSquares(makeNewtonFunction(self, mom, pos, grad, jac))](&x)
+			var retcode = [newton.newtonLeastSquares(makeNewtonFunction(self, mom, pos, grad, jac))](&x)
+			-- C.printf("%d               \n", retcode)
 
 			-- Then, solve linear system:
 			--   (1) p1 = p1/2 - step/2 * ( grad1 + J1^T*mu )

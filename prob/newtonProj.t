@@ -54,6 +54,8 @@ end
 local function newtonPlusHMCManifoldProjection(computation, hmcKernelParams, mcmcParams, maxTotalSamps)
 	-- Tell HMC to use relaxed manifolds
 	hmcKernelParams.relaxManifolds = true
+	-- If maxTotalSamps not provided, just run things (effectively) forever
+	maxTotalSamps = maxTotalSamps or 10000000000
 	local maxIters = maxTotalSamps / mcmcParams.numsamps
 	return terra(currTrace: &trace.BaseTrace(double), samples: &inf.SampleVectorType(computation))
 		var kernel = [HMC(hmcKernelParams)()]
