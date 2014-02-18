@@ -169,7 +169,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 						for j=0,nconstrs do
 							j0tlam = j0tlam + J0(j,i)*lambda(x, nvars, j)
 						end
-						pHalf(y, nvars, i) = p0(i) - 0.5*self.stepSize * (grad0(i) + j0tlam) - pHalf(x, nvars, i)
+						pHalf(y, nvars, i) = p0(i) + 0.5*self.stepSize * (grad0(i) + j0tlam) - pHalf(x, nvars, i)
 					end
 					-- Compute equation 2
 					for i=0,nvars do
@@ -204,7 +204,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		-- 				for j=0,nconstrs do
 		-- 					j1tmu = j1tmu + J1(j,i)*mu(x, nvars, j)
 		-- 				end
-		-- 				p1(y, nvars, i) = pHalf(i) - 0.5*self.stepSize*(grad1(i) + j1tmu) - p1(x, nvars, i)
+		-- 				p1(y, nvars, i) = pHalf(i) + 0.5*self.stepSize*(grad1(i) + j1tmu) - p1(x, nvars, i)
 		-- 			end
 		-- 			-- Compute equation 2
 		-- 			for i=0,nconstrs do
@@ -221,7 +221,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		terra HMCKernelT:integratorStep(pos: &Vector(double), mom: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
 			-----------------------------------------------------------
 			-- First, solve nonlinear system:
-			--   (1) 0 = p0 - step/2 * ( grad0 + J0^T*lambda ) - p1/2
+			--   (1) 0 = p0 + step/2 * ( grad0 + J0^T*lambda ) - p1/2
 			--   (2) 0 = q0 + step * (p1/2 / m) - q1
 			--   (3) 0 = c(q1)
 			-----------------------------------------------------------
@@ -245,32 +245,21 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 
 			-----------------------------------------------------------
 			-- Then, solve linear system:
-			--   (1) 0 = p1/2 - step/2 * ( grad1 + J1^T*mu ) - p1
+			--   (1) 0 = p1/2 + step/2 * ( grad1 + J1^T*mu ) - p1
 			--   (2) 0  = J1 * (p1 / m)
 			-----------------------------------------------------------
 
-			-- -- For simplicity, we'll still use newton (which should internally end up using
-			-- --    just one linear solve)
-			-- -- Pack the solution vector as p1, mu
-			-- x:resize(nvars + nconstrs)
-			-- -- Use p1/2, 0 as initial guess
-			-- for i=0,nvars do p1(x, nvars, i) = mom(i) end
-			-- for i=0,nconstrs do mu(x, nvars, i) = 0.0 end
-			-- retcode = [newton.newtonLeastSquares(makePart2NewtonFn(self, mom, pos, grad, jac))](&x)
-
-
-
 			-- As a matrix equation b = Ax, this is expressed as:
-			--   | -p1/2 + step2 * grad1 | = | -I      -step/2*J1^T | * | p1 |
+			--   | p1/2 + step/2 * grad1 | = |  I      -step/2*J1^T | * | p1 |
 			--   | 0                     | = |  J1/m   0            | * | mu |
 			-- Set up b vector
 			var b = [Vector(double)].stackAlloc(nvars + nconstrs, 0.0)
-			for i=0,nvars do p1(b, nvars, i) = -pHalf(x, nvars, i) + self.stepSize/2.0 * grad(i) end
+			for i=0,nvars do p1(b, nvars, i) = pHalf(x, nvars, i) + 0.5*self.stepSize * grad(i) end
 			-- Set up A matrix
 			var A = [Grid2D(double)].stackAlloc(b.size, b.size, 0.0)
 			for i=0,nvars do
-				-- -I block
-				A(i,i) = -1.0
+				-- I block
+				A(i,i) = 1.0
 			end
 			for i=0,jac.rows do
 				for j=0,jac.cols do
@@ -285,6 +274,15 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			m.destruct(b)
 			m.destruct(A)
 
+
+			-- -- For simplicity, we'll still use newton (which should internally end up using
+			-- --    just one linear solve)
+			-- -- Pack the solution vector as p1, mu
+			-- x:resize(nvars + nconstrs)
+			-- -- Use p1/2, 0 as initial guess
+			-- for i=0,nvars do p1(x, nvars, i) = mom(i) end
+			-- for i=0,nconstrs do mu(x, nvars, i) = 0.0 end
+			-- retcode = [newton.newtonLeastSquares(makePart2NewtonFn(self, mom, pos, grad, jac))](&x)
 
 
 			-- Extract p1 into mom
