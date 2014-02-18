@@ -322,7 +322,9 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		terra HMCKernelT:sampleNewMomenta(mom: &Vector(double))
 			-- Sample new momenta, project onto manifold cotangent bundle
 			self:sampleNewMomentaRaw(mom)
-			linsolve.nullSpaceProjection(&self.constraintJacobian, mom, mom)
+			if self.constraintJacobian.rows > 0 then
+				linsolve.nullSpaceProjection(&self.constraintJacobian, mom, mom)
+			end
 		end
 	else
 		HMCKernelT.methods.sampleNewMomenta = HMCKernelT.methods.sampleNewMomentaRaw
@@ -592,16 +594,16 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			util.assert([inheritance.isInstanceOf(trace.GlobalTrace(double))](currTrace),
 				"CHMC only defined for single execution traces (not interpolation traces)\n")
 			var globTrace = [&trace.GlobalTrace(double)](currTrace)
-			util.assert(globTrace.manifolds.size > 0,
-				"CHMC only defined when manifold constraints are used\n")
-			var thresh = 1e-8
-			var mnorm = 0.0
-			for i=0,globTrace.manifolds.size do
-				var mval = globTrace.manifolds(i)
-				mnorm = mnorm + mval*mval				
+			if globTrace.manifolds.size > 0 then
+				var thresh = 1e-8
+				var mnorm = 0.0
+				for i=0,globTrace.manifolds.size do
+					var mval = globTrace.manifolds(i)
+					mnorm = mnorm + mval*mval				
+				end
+				util.assert(mnorm < thresh,
+					"CHMC only defined when manifold constraints are satisfied; manifold norm was %g (greater than threshold %g)\n", mnorm, thresh)
 			end
-			util.assert(mnorm < thresh,
-				"CHMC only defined when manifold constraints are satisfied; manifold norm was %g (greater than threshold %g)\n", mnorm, thresh)
 		end end)]
 	end
 
