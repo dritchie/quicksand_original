@@ -136,7 +136,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		-- If we're doing regular HMC, we just need the gradient
 		--    of lp w.r.t to pos
 		[util.optionally(not constrainToManifold, function() return quote
-			duallp:grad(&self.indepVarNums, grad)	
+			duallp:grad(&self.indepVarNums, grad)
 		end end)]
 		-- If we're doing CHMC, then we also need the constraint jacobian
 		[util.optionally(constrainToManifold, function() return quote
@@ -149,38 +149,35 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 
 	-- Integrators
 	if constrainToManifold then
-		-- RATTLE
+		-- Convience macros for extracting sub-vectors
 		local pHalf = macro(function(x, nvars, i) return `x(i) end)
 		local q1 = macro(function(x, nvars, i) return `x(nvars + i) end)
 		local lambda = macro(function(x, nvars, i) return `x(2*nvars + i) end)
-		local function makeNewtonFunction(self, p0, q0, grad0, J0)
+		local p1 = macro(function(x, nvars, i) return `x(i) end)
+		local mu = macro(function(x, nvars, i) return `x(nvars + i) end)
+		-- RATTLE
+		local function makePart1NewtonFn(self, p0, q0, grad0, J0)
 			return newton.wrapDualFn(macro(function(x, y)
 				return quote
 					y:resize(x.size)
 					var nvars = q0.size
 					var nconstrs = J0.rows
-					-- Extract lambda, compute J0^T * lambda
-					var lam = [Vector(ad.num)].stackAlloc(nconstrs, 0.0)
-					for i=0,lam.size do lam(i) = lambda(x, nvars, i) end
-					var j0transposeLambda = [Vector(ad.num)].stackAlloc(J0.cols, 0.0)
-					for i=0,J0.cols do
-						var sum = ad.num(0.0)
-						for j=0,J0.rows do
-							sum = sum + J0(j,i)*lam(j)
-						end
-						j0transposeLambda(i) = sum
-					end
 					-- Compute equation 1
-					for i=0,p0.size do
-						pHalf(y, nvars, i) = p0(i) - 0.5*self.stepSize * (grad0(i) + j0transposeLambda(i)) - pHalf(x, nvars, i)
+					for i=0,nvars do
+						-- Get one entry of J0^T * lambda
+						var j0tlam = ad.num(0.0)
+						for j=0,nconstrs do
+							j0tlam = j0tlam + J0(j,i)*lambda(x, nvars, j)
+						end
+						pHalf(y, nvars, i) = p0(i) - 0.5*self.stepSize * (grad0(i) + j0tlam) - pHalf(x, nvars, i)
 					end
 					-- Compute equation 2
-					for i=0,q0.size do
+					for i=0,nvars do
 						q1(y, nvars, i) = q0(i) + self.stepSize * pHalf(x, nvars, i) * self.invMasses(i) - q1(x, nvars, i)
 					end
 					-- Update the trace so we can get c(q1)
 					var qOne = [Vector(ad.num)].stackAlloc(nvars, 0.0)
-					for i=0,q0.size do
+					for i=0,nvars do
 						qOne(i) = q1(x, nvars, i)
 					end
 					self.adTrace:setRawNonStructuralReals(&qOne)
@@ -190,19 +187,44 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 					for i=0,globTrace.manifolds.size do
 						lambda(y, nvars, i) = globTrace.manifolds(i)
 					end
-					m.destruct(lam)
-					m.destruct(j0transposeLambda)
 					m.destruct(qOne)
 				end
 			end))
 		end
-		local p1 = macro(function(x, nvars, i) return `x(i) end)
-		local mu = macro(function(x, nvars, i) return `x(nvars + i) end)
+		-- local function makePart2NewtonFn(self, pHalf, q1, grad1, J1)
+		-- 	return newton.wrapDualFn(macro(function(x, y)
+		-- 		return quote
+		-- 			y:resize(x.size)
+		-- 			var nvars = q1.size
+		-- 			var nconstrs = J1.rows
+		-- 			-- Compute equation 1
+		-- 			for i=0,nvars do
+		-- 				-- Get one entry of J1^T*mu
+		-- 				var j1tmu = ad.num(0.0)
+		-- 				for j=0,nconstrs do
+		-- 					j1tmu = j1tmu + J1(j,i)*mu(x, nvars, j)
+		-- 				end
+		-- 				p1(y, nvars, i) = pHalf(i) - 0.5*self.stepSize*(grad1(i) + j1tmu) - p1(x, nvars, i)
+		-- 			end
+		-- 			-- Compute equation 2
+		-- 			for i=0,nconstrs do
+		-- 				-- Get one entry of J1 * p1/m
+		-- 				var j1p1m = ad.num(0.0)
+		-- 				for j=0,nvars do
+		-- 					j1p1m = j1p1m + J1(i,j)*p1(x, nvars, j) * self.invMasses(j)
+		-- 				end
+		-- 				mu(y, nvars, i) = j1p1m
+		-- 			end
+		-- 		end
+		-- 	end))
+		-- end
 		terra HMCKernelT:integratorStep(pos: &Vector(double), mom: &Vector(double), grad: &Vector(double), jac: &Grid2D(double))
+			-----------------------------------------------------------
 			-- First, solve nonlinear system:
 			--   (1) 0 = p0 - step/2 * ( grad0 + J0^T*lambda ) - p1/2
 			--   (2) 0 = q0 + step * (p1/2 / m) - q1
 			--   (3) 0 = c(q1)
+			-----------------------------------------------------------
 
 			-- Pack the solution vector as: p1/2, q1, lambda
 			var nvars = pos.size 
@@ -211,22 +233,36 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			-- Use p0, q0, 0 as initial guess
 			for i=0,nvars do pHalf(x, nvars, i) = mom(i) end
 			for i=0,nvars do q1(x, nvars, i) = pos(i) end
-			var retcode = [newton.newtonLeastSquares(makeNewtonFunction(self, mom, pos, grad, jac))](&x)
+			var retcode = [newton.newtonLeastSquares(makePart1NewtonFn(self, mom, pos, grad, jac))](&x)
 			-- C.printf("%d               \n", retcode)
 
+			-- Extract q1 into pos
+			for i=0,nvars do pos(i) = q1(x, nvars, i) end
+			-- Extract p1/2 into mom
+			for i=0,nvars do mom(i) = pHalf(x, nvars, i) end
+			-- Compute grad1 and J1
+			var lp = self:update(pos, grad, jac)
+
+			-----------------------------------------------------------
 			-- Then, solve linear system:
-			--   (1) p1 = p1/2 - step/2 * ( grad1 + J1^T*mu )
+			--   (1) 0 = p1/2 - step/2 * ( grad1 + J1^T*mu ) - p1
 			--   (2) 0  = J1 * (p1 / m)
+			-----------------------------------------------------------
+
+			-- -- For simplicity, we'll still use newton (which should internally end up using
+			-- --    just one linear solve)
+			-- -- Pack the solution vector as p1, mu
+			-- x:resize(nvars + nconstrs)
+			-- -- Use p1/2, 0 as initial guess
+			-- for i=0,nvars do p1(x, nvars, i) = mom(i) end
+			-- for i=0,nconstrs do mu(x, nvars, i) = 0.0 end
+			-- retcode = [newton.newtonLeastSquares(makePart2NewtonFn(self, mom, pos, grad, jac))](&x)
+
+
+
 			-- As a matrix equation b = Ax, this is expressed as:
 			--   | -p1/2 + step2 * grad1 | = | -I      -step/2*J1^T | * | p1 |
 			--   | 0                     | = |  J1/m   0            | * | mu |
-
-			-- Extract q1 into pos
-			for i=0,nvars do
-				pos(i) = q1(x, nvars, i)
-			end
-			-- Compute grad1 and J1
-			var lp = self:update(pos, grad, jac)
 			-- Set up b vector
 			var b = [Vector(double)].stackAlloc(nvars + nconstrs, 0.0)
 			for i=0,nvars do p1(b, nvars, i) = -pHalf(x, nvars, i) + self.stepSize/2.0 * grad(i) end
@@ -246,13 +282,15 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			end
 			-- Solve
 			linsolve.leastSquares(&A, &b, &x)
+			m.destruct(b)
+			m.destruct(A)
+
+
+
 			-- Extract p1 into mom
 			for i=0,nvars do mom(i) = p1(x, nvars, i) end
 
 			m.destruct(x)
-			m.destruct(b)
-			m.destruct(A)
-
 			return lp
 		end
 	else
