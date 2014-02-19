@@ -326,7 +326,7 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 			if paramtypes[i] == otherparamtypes[i] then
 				table.insert(lines, quote [selfparamexprs[i]] = m.copy([otherparamexprs[i]]) end)
 			else
-				table.insert(lines, quote [selfparamexprs[i]] = [m.templatecopy(ProbType)]([otherparamexprs[i]]) end)
+				table.insert(lines, quote [selfparamexprs[i]] = [m.templatecopy(paramtypes[i])]([otherparamexprs[i]]) end)
 			end
 		end
 		return lines
