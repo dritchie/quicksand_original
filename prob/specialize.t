@@ -138,7 +138,11 @@ return
 	isProbComp = isProbComp,
 	ensureProbComp = ensureProbComp,
 	registerPreGlobalSpecializationEvent = registerPreGlobalSpecializationEvent,
-	registerGlobalSpecializable = registerGlobalSpecializable
+	registerGlobalSpecializable = registerGlobalSpecializable,
+	globals =
+	{
+		probcomp = probcomp
+	}
 }
 
 

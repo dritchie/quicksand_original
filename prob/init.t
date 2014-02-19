@@ -38,7 +38,8 @@ processModules("erph",
 			   "inference",
 			   "memoize",
 			   "larj",
-			   "hmc")
+			   "hmc",
+			   "specialize")
 
 -- Seed the random sampler
 rand.initrand()
