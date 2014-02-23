@@ -458,9 +458,36 @@ local MAP = macro(function(samps)
 			end
 		end
 	in
-		best.value
+		best
 	end
 end)
+
+-- Sample from a computation by repeatedly burning in from a random initial
+--    configuration
+local function sampleByRepeatedBurnin(computation, kernelgen, mcmcparams, numsamps)
+	computation = spec.ensureProbComp(computation)
+	local terra doSampling()
+		C.printf("Sampling by repeated burn-in...\n")
+		var kernel = [kernelgen()]
+		var samps = [SampleVectorType(computation)].stackAlloc()
+		var tmpsamps = [SampleVectorType(computation)].stackAlloc()
+		for i=0,numsamps do
+			C.printf("Iteration %d / %d\n", i+1, numsamps)
+			tmpsamps:clear()
+			var currTrace : &BaseTraceD = [trace.newTrace(computation)]
+			currTrace = [mcmcSample(computation, mcmcparams)](currTrace, kernel, &tmpsamps)
+			m.delete(currTrace)
+			var map = MAP(tmpsamps)
+			samps:push(map)
+			m.destruct(map)
+		end
+		m.destruct(tmpsamps)
+		m.delete(kernel)
+		C.printf("DONE\n")
+		return samps
+	end
+	return `doSampling()
+end
 
 -- Draw a sample from a computation via rejection
 local function rejectionSample(computation)
@@ -491,6 +518,7 @@ return
 		forwardSample = forwardSample,
 		mcmc = mcmc,
 		rejectionSample = rejectionSample,
+		sampleByRepeatedBurnin = sampleByRepeatedBurnin,
 		mean = mean,
 		expectation = expectation,
 		MAP = MAP
