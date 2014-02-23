@@ -307,8 +307,9 @@ local Sample = templatize(function(ValType)
 		logprob: double
 	}
 
+	-- Assumes ownership of (i.e. does not copy) val
 	terra Samp:__construct(val: ValType, lp: double)
-		self.value = m.copy(val)
+		self.value = val
 		self.logprob = lp
 	end
 
@@ -448,17 +449,14 @@ end)
 -- Find the highest scoring sample
 local MAP = macro(function(samps)
 	return quote
-		var best = m.copy(samps(0))
+		var bestindex = 0
 		for i=1,samps.size do
-			var s = samps:getPointer(i)
-			if s.logprob > best.logprob then
-				best.logprob = s.logprob
-				m.destruct(best.value)
-				best.value = m.copy(s.value)
+			if samps(i).logprob > samps(bestindex).logprob then
+				bestindex = i
 			end
 		end
 	in
-		best
+		samps(bestindex)
 	end
 end)
 
@@ -477,9 +475,7 @@ local function sampleByRepeatedBurnin(computation, kernelgen, mcmcparams, numsam
 			var currTrace : &BaseTraceD = [trace.newTrace(computation)]
 			currTrace = [mcmcSample(computation, mcmcparams)](currTrace, kernel, &tmpsamps)
 			m.delete(currTrace)
-			var map = MAP(tmpsamps)
-			samps:push(map)
-			m.destruct(map)
+			samps:push(MAP(tmpsamps))
 		end
 		m.destruct(tmpsamps)
 		m.delete(kernel)
