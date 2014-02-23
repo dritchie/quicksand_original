@@ -466,19 +466,19 @@ local function sampleByRepeatedBurnin(computation, kernelgen, mcmcparams, numsam
 	computation = spec.ensureProbComp(computation)
 	local terra doSampling()
 		C.printf("Sampling by repeated burn-in...\n")
-		var kernel = [kernelgen()]
 		var samps = [SampleVectorType(computation)].stackAlloc()
 		var tmpsamps = [SampleVectorType(computation)].stackAlloc()
 		for i=0,numsamps do
 			C.printf("Iteration %d / %d\n", i+1, numsamps)
 			tmpsamps:clear()
+			var kernel = [kernelgen()]
 			var currTrace : &BaseTraceD = [trace.newTrace(computation)]
 			currTrace = [mcmcSample(computation, mcmcparams)](currTrace, kernel, &tmpsamps)
 			m.delete(currTrace)
+			m.delete(kernel)
 			samps:push(MAP(tmpsamps))
 		end
 		m.destruct(tmpsamps)
-		m.delete(kernel)
 		C.printf("DONE\n")
 		return samps
 	end

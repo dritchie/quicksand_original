@@ -524,9 +524,7 @@ RandExecTrace = templatize(function(ProbType, computation)
 
 			-- Run computation
 			if self.hasReturnValue then m.destruct(self.returnValue) end
-			-- C.printf("--- traceUpdate START (ProbType: %s)---\n", [tostring(ProbType)])
 			self.returnValue = speccomp()
-			-- C.printf("---  traceUpdate END  ---\n")
 			self.hasReturnValue = true
 
 			-- Clean up
