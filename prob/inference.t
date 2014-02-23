@@ -332,15 +332,15 @@ end)
 
 
 -- Convenience methods for managing types related to samples from computations.
-local ReturnType = templatize(function(computation)
+local ReturnType = function(computation)
 	return computation():getdefinitions()[1]:gettype().returntype
-end)
-local SampleType = templatize(function(computation)
+end
+local SampleType = function(computation)
 	return Sample(ReturnType(computation))
-end)
-local SampleVectorType = templatize(function(computation)
+end
+local SampleVectorType = function(computation)
 	return Vector(SampleType(computation))
-end)
+end
 
 local function extractReturnValue(computation)
 	local DerivedTraceType = RandExecTrace(double, computation)
