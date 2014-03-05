@@ -407,15 +407,6 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 			self.invMass = 1.0/mass
 			hasChanges = true
 		end
-		-- Check for change in conditioned value.
-		[util.optionally(hasCondVal, function() return quote
-			var val = self:inverseTransform([erph.opts.getCondVal(`options, OpstructType)])
-			if [util.istype(ad.num)](val) or not (self.value == val) then
-				m.destruct(self.value)
-				self.value = m.copy(val)
-				hasChanges = true
-			end
-		end end)]
 		-- Check for change in bounds
 		[util.optionally(hasLowerBound, function() return quote
 			var lowerBound = [erph.opts.getLowerBound(`options, OpstructType)]
@@ -428,6 +419,16 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 			var upperBound = [erph.opts.getUpperBound(`options, OpstructType)]
 			if [util.istype(ad.num)](upperBound) or not (self.upperBound == upperBound) then
 				self.upperBound = upperBound
+				hasChanges = true
+			end
+		end end)]
+		-- Check for change in conditioned value.
+		[util.optionally(hasCondVal, function() return quote
+			var val = [erph.opts.getCondVal(`options, OpstructType)]
+			val = self:inverseTransform(val)
+			if [util.istype(ad.num)](val) or not (self.value == val) then
+				m.destruct(self.value)
+				self.value = m.copy(val)
 				hasChanges = true
 			end
 		end end)]
