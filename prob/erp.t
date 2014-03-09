@@ -223,7 +223,10 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		inverseTransform = macro(function(self, y)
 			return quote
 				var z = ad.math.fmax(ad.math.fmin(y, self.upperBound - 1e-15), self.lowerBound + 1e-15)
-				var x = invlogistic((z - self.lowerBound) / (self.upperBound - self.lowerBound))
+				var t = (z - self.lowerBound) / (self.upperBound - self.lowerBound)
+				var x = invlogistic(t)
+				-- C.printf("y: %g, z: %g, t: %g, x: %g, lowerBound: %g, upperBound:%g\n",
+				-- 	ad.val(y), ad.val(z), ad.val(t), ad.val(x), ad.val(self.lowerBound), ad.val(self.upperBound))
 			in
 				x
 			end

@@ -368,6 +368,17 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		self.stepSize = 1.0
 		var pos = m.copy(self.positions)
 		var grad = m.copy(self.gradient)
+		-- C.printf("==========\n")
+		-- C.printf("Initial pos is:\n")
+		-- for i=0,pos.size do
+		-- 	C.printf("%g\n", pos(i))
+		-- end
+		-- C.printf("----------\n")
+		-- C.printf("Gradient is:\n")
+		-- for i=0,grad.size do
+		-- 	C.printf("%g\n", grad(i))
+		-- end
+		-- C.printf("----------\n")
 		var mom = [Vector(double)].stackAlloc()
 		var jac = [Grid2D(double)].stackAlloc()
 		var jacptr : &Grid2D(double) = nil
@@ -379,6 +390,11 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 		self:sampleNewMomenta(&mom)
 		var lastlp = self.adTrace.logprob:val()
 		var lp = self:integratorStep(&pos, &mom, &grad, jacptr)
+		-- C.printf("Next pos is:\n")
+		-- for i=0,pos.size do
+		-- 	C.printf("%g\n", pos(i))
+		-- end
+		-- C.printf("----------\n")
 		var H = lp - lastlp
 		var direction = -1
 		if H > ad.math.log(0.5) then direction = 1 end
