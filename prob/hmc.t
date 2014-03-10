@@ -364,6 +364,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 	terra HMCKernelT:searchForStepSize()
 		[util.optionally(verbosity > 2, function() return quote
 			C.printf("Searching for HMC step size...\n")
+			C.printf("Initial lp: %g\n", self.adTrace.logprob:val())
 		end end)]
 		self.stepSize = 1.0
 		var pos = m.copy(self.positions)
@@ -403,6 +404,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 				C.printf("-------\n")
 				C.printf("stepSize: %g\n", self.stepSize)
 				C.printf("lp: %g\n", lp)
+				C.printf("H: %g\n", H)
 			end end)]
 			m.destruct(pos)
 			pos = m.copy(self.positions)
@@ -423,18 +425,18 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			--    keep halving the step size until the initial step improves by
 			--    as close as possible to 0.5
 			if (direction == 1) and (H <= ad.math.log(0.5)) then
+				[util.optionally(verbosity > 2, function() return quote
+					C.printf("Terminated doubling search because H <= log(0.5). H = %g\n", H)
+				end end)]
 				break
 			elseif (direction == -1) and (H >= ad.math.log(0.5)) then
+				[util.optionally(verbosity > 2, function() return quote
+					C.printf("Terminated halving search because H >= log(0.5). H = %g\n", H)
+				end end)]
 				break
 			elseif direction == 1 then
-				[util.optionally(verbosity > 3, function() return quote
-					C.printf("doubling...\n")
-				end end)]
 				self.stepSize = self.stepSize * 2.0
 			else
-				[util.optionally(verbosity > 3, function() return quote
-					C.printf("halving...\n")
-				end end)]
 				self.stepSize = self.stepSize * 0.5
 			end
 			-- Check for divergence to infinity or collapse to zero.
