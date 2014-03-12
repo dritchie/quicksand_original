@@ -45,7 +45,7 @@ local function isValidProbFn(fn)
 	local rettype = t.returntype
 	for i=2,#fn:getdefinitions() do
 		s, t = fn:getdefinitions()[i]:peektype()
-		assert(#t.returntype == rettype)
+		assert(t.returntype == rettype)
 	end
 end
 local nextid = 0
