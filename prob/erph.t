@@ -199,6 +199,12 @@ end
 function opts.getUpperBound(opstruct, ostyp)
 	return opts.getErpOption(opstruct, ostyp, "upperBound", nil)
 end
+function opts.hasBoundShapeParam(ostyp)
+	return opts.hasErpOption(ostyp, "boundShapeParam")
+end
+function opts.getBoundShapeParam(opstruct, ostyp)
+	return opts.getErpOption(opstruct, ostyp, "boundShapeParam", `1.0)
+end
 function opts.hasInitialVal(ostyp)
 	return opts.hasErpOption(ostyp, "initialVal")
 end

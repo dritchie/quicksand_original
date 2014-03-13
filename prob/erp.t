@@ -131,11 +131,11 @@ RandVarWithVal = templatize(function(ProbType, ValType)
 end)
 
 -- Some utility functions for bounded variable transforms
-local logistic = macro(function(x)
-	return `1.0 / (1.0 + ad.math.exp(-x))
+local logistic = macro(function(x, scale)
+	return `1.0 / (1.0 + ad.math.exp(-scale*x))
 end)
-local invlogistic = macro(function(y)
-	return `-ad.math.log(1.0/y - 1.0)
+local invlogistic = macro(function(y, scale)
+	return `-ad.math.log(1.0/y - 1.0)/scale
 end)
 
 -- Finally, at the bottom of the hierarchy, we have random primitives defined by a set of functions
@@ -163,7 +163,9 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	local hasCondVal = erph.opts.hasCondVal(OpstructType)
 	local hasLowerBound = erph.opts.hasLowerBound(OpstructType)
 	local hasUpperBound = erph.opts.hasUpperBound(OpstructType)
+	local hasBoundShapeParam = erph.opts.hasBoundShapeParam(OpstructType)
 	local isBounded = hasLowerBound or hasUpperBound
+	local isBothSidesBounded = hasLowerBound and hasUpperBound
 
 	-- Initialize the class we're building
 	local struct RandVarFromFunctionsT { hasChanges: bool }
@@ -172,15 +174,21 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	inheritance.dynamicExtend(ParentClass, RandVarFromFunctionsT)
 
 	-- Add upper/lower bounds, if provided
-	if erph.opts.hasLowerBound(OpstructType) then
+	if hasLowerBound then
 		local t = erph.opts.typeOfErpOption(OpstructType, "lowerBound")
-		-- local t = ValType
 		RandVarFromFunctionsT.entries:insert({field = "lowerBound", type = t})
 	end
-	if erph.opts.hasUpperBound(OpstructType) then
+	if hasUpperBound then
 		local t = erph.opts.typeOfErpOption(OpstructType, "upperBound")
-		-- local t = ValType
 		RandVarFromFunctionsT.entries:insert({field = "upperBound", type = t})
+	end
+	-- Add bounding shape param, if both upper and lower bounds were provided
+	if isBothSidesBounded then
+		local t = double
+		if hasBoundShapeParam then
+			t = erph.opts.typeOfErpOption(OpstructType, "boundShapeParam")
+		end
+		RandVarFromFunctionsT.entries:insert({field = "boundShapeParam", type = t})
 	end
 
 	-- Add one field for each parameter
@@ -213,7 +221,7 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	if hasLowerBound and hasUpperBound then
 		forwardTransform = macro(function(self, x)
 			return quote
-				var logit = logistic(x)
+				var logit = logistic(x, self.boundShapeParam)
 				if x > [-math.huge] and logit == 0.0 then logit = 1e-15 end
 				if x < [math.huge] and logit == 1.0 then logit = [1.0 - 1e-15] end
 			in
@@ -224,7 +232,7 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 			return quote
 				var z = ad.math.fmax(ad.math.fmin(y, self.upperBound - 1e-15), self.lowerBound + 1e-15)
 				var t = (z - self.lowerBound) / (self.upperBound - self.lowerBound)
-				var x = invlogistic(t)
+				var x = invlogistic(t, self.boundShapeParam)
 				-- C.printf("y: %g, z: %g, t: %g, x: %g, lowerBound: %g, upperBound:%g\n",
 				-- 	ad.val(y), ad.val(z), ad.val(t), ad.val(x), ad.val(self.lowerBound), ad.val(self.upperBound))
 			in
@@ -233,7 +241,7 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		end)
 		priorAdjustment = macro(function(self, x)
 			-- Simplification of ad.math.log((self.upperBound - self.lowerBound) * logistic(x) * (1 - logistic(x)))
-			return `ad.math.log(self.upperBound - self.lowerBound) - x - 2.0*ad.math.log(1.0 + ad.math.exp(-x))
+			return `ad.math.log(self.upperBound - self.lowerBound) - self.boundShapeParam*x - 2.0*ad.math.log(1.0 + ad.math.exp(-self.boundShapeParam*x))
 		end)
 	elseif hasLowerBound then
 		forwardTransform = macro(function(self, x) return `ad.math.exp(x) + self.lowerBound end)
@@ -305,6 +313,10 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 		[util.optionally(hasUpperBound, function() return quote
 			self.upperBound = [erph.opts.getUpperBound(`options, OpstructType)]
 		end end)]
+		-- Record bounding shape (or a default, if not provided)
+		[util.optionally(isBothSidesBounded, function() return quote
+			self.boundShapeParam = [erph.opts.getBoundShapeParam(`options, OpstructType)]
+		end end)]
 		-- Finish up
 		val = self:inverseTransform(val)
 		ParentClass.__construct(self, val, isstruct, iscond, depth, mass)
@@ -346,6 +358,9 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 			end end)]
 			[util.optionally(hasUpperBound, function() return quote
 				self.upperBound = other.upperBound
+			end end)]
+			[util.optionally(isBothSidesBounded, function() return quote
+				self.boundShapeParam = other.boundShapeParam
 			end end)]
 		end
 	end)
@@ -422,6 +437,13 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 			var upperBound = [erph.opts.getUpperBound(`options, OpstructType)]
 			if [util.istype(ad.num)](upperBound) or not (self.upperBound == upperBound) then
 				self.upperBound = upperBound
+				hasChanges = true
+			end
+		end end)]
+		[util.optionally(hasBoundShapeParam, function() return quote
+			var boundShapeParam = [erph.opts.getBoundShapeParam(`options, OpstructType)]
+			if [util.istype(ad.num)](boundShapeParam) or not (self.boundShapeParam == boundShapeParam) then
+				self.boundShapeParam = boundShapeParam
 				hasChanges = true
 			end
 		end end)]
