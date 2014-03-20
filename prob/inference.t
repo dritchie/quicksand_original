@@ -426,9 +426,8 @@ local mean = macro(function(vals)
 		for i=1,vals.size do
 			m = m + vals(i)
 		end
-		m = m / [double](vals.size)
 	in
-		m
+		m / [double](vals.size)
 	end
 end)
 
@@ -440,9 +439,8 @@ local expectation = macro(function(samps)
 		for i=1,samps.size do
 			m = m + samps(i).value
 		end
-		m = m / [double](samps.size)
 	in
-		m
+		m / [double](samps.size)
 	end
 end)
 
