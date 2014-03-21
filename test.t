@@ -25,8 +25,8 @@ local terra test(name: rawstring, estimates: &Vector(double), trueExpectation: d
 	for i=0,estimates.size do
 		errors:push(C.fabs(estimates:get(i) - trueExpectation))
 	end
-	var meanAbsErr = mean(&errors)
-	var testMean = mean(estimates)
+	var meanAbsErr = expectation(&errors)
+	var testMean = expectation(estimates)
 	if meanAbsErr > errorTolerance then
 		C.printf("failed! True mean: %g | Test mean: %g\n", trueExpectation, testMean)
 	else
@@ -42,7 +42,7 @@ local function fwdtest(name, computation, trueExpectation)
 			for i=0,numsamps do
 				samps:push(computation())
 			end
-			estimates:push(mean(&samps))
+			estimates:push(expectation(&samps))
 			m.destruct(samps)
 		end
 		test(name, &estimates, trueExpectation)
@@ -55,7 +55,7 @@ local function mhtest(name, computation, trueExpectation)
 		var estimates = [Vector(double)].stackAlloc()
 		for run=0,runs do
 			var samps = [mcmc(computation, RandomWalk(), {numsamps=numsamps, lag=lag, verbose=false})]
-			estimates:push(expectation(&samps))
+			estimates:push(sampleExpectation(&samps))
 			m.destruct(samps)
 		end
 		test(name, &estimates, trueExpectation)
@@ -69,7 +69,7 @@ local function larjtest(name, computation, trueExpectation)
 		var estimates = [Vector(double)].stackAlloc()
 		for run=0,runs do
 			var samps = [mcmc(computation, kernel, {numsamps=numsamps, lag=lag, verbose=false})]
-			estimates:push(expectation(&samps))
+			estimates:push(sampleExpectation(&samps))
 			m.destruct(samps)
 		end
 		test(name, &estimates, trueExpectation)
@@ -82,7 +82,7 @@ end
 -- 		var estimates = [Vector(double)].stackAlloc()
 -- 		for run=0,runs do
 -- 			var samps = [mcmc(computation, ADRandomWalk(), {numsamps=numsamps, lag=lag, verbose=false})]
--- 			estimates:push(expectation(&samps))
+-- 			estimates:push(sampleExpectation(&samps))
 -- 			m.destruct(samps)
 -- 		end
 -- 		test(name, &estimates, trueExpectation)
@@ -96,7 +96,7 @@ local function hmctest(name, computation, trueExpectation, numSteps, stepSize)
 		var estimates = [Vector(double)].stackAlloc()
 		for run=0,runs do
 			var samps = [mcmc(computation, HMC({numSteps=numSteps}), {numsamps=numsamps, lag=lag, verbose=false})]
-			estimates:push(expectation(&samps))
+			estimates:push(sampleExpectation(&samps))
 			m.destruct(samps)
 		end
 		test(name, &estimates, trueExpectation)

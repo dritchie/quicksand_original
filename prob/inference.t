@@ -306,6 +306,7 @@ local Sample = templatize(function(ValType)
 		value: ValType,
 		logprob: double
 	}
+	Samp.ValueType = ValType
 
 	-- Assumes ownership of (i.e. does not copy) val
 	terra Samp:__construct(val: ValType, lp: double)
@@ -420,27 +421,115 @@ end
 
 -- Compute the mean of a vector of values
 -- Value type must define + and scalar division
-local mean = macro(function(vals)
+local expectation = macro(function(values)
 	return quote
-		var m = m.copy(vals(0))
+		var vals = values
+		var me = m.copy(vals(0))
 		for i=1,vals.size do
-			m = m + vals(i)
+			me = me + vals(i)
 		end
 	in
-		m / [double](vals.size)
+		me / double(vals.size)
 	end
 end)
 
--- Compute expectation over a vector of samples
--- The value type must define + and scalar division
-local expectation = macro(function(samps)
+-- If ValType is a struct, look for a :dot method
+-- Default to using the * operator
+local function innerProd(ValType)
+	local iprod = function(x,y) return `x*y end
+	if ValType:isstruct() and ValType.methods.dot then
+		iprod = function(x,y) return `x:dot(y) end
+	end
+	return iprod
+end
+
+-- Compute the variance of a vector of values
+-- Value type must define + and scalar division
+local variance = macro(function(values, mean)
+	local iprod = innerProd(values:gettype().ValueType)
 	return quote
-		var m = m.copy(samps(0).value)
-		for i=1,samps.size do
-			m = m + samps(i).value
+		var vals = values
+		var me = mean
+		var v = 0.0
+		for i=0,vals.size do
+			var diff = vals(i) - me
+			v = v + [iprod(diff, diff)]
 		end
 	in
-		m / [double](samps.size)
+		v / vals.size
+	end
+end)
+
+-- Compute the autocorrelation of a set of values
+-- If optmean and optvar are not provided, use the
+--    mean and variance of vals
+local autocorrelation = macro(function(values, optmean, optvar)
+	local iprod = innerProd(values:gettype().ValueType)
+	local computeMeanVar = optmean == nil or optvar == nil
+	return quote
+		var vals = values
+		-- Set up desired mean and variance
+		var me = vals(0)
+		var v = 0.0
+		[util.optionally(computeMeanVar, function() return quote
+			me = expectation(vals)
+			v = variance(vals, me)
+		end end)]
+		[util.optionally(not computeMeanVar, function() return quote
+			me = optmean
+			v = optvar
+		end end)]
+		-- Compute autocorrelation
+		var ac = [Vector(double)].stackAlloc(vals.size, 0.0)
+		for t=0,vals.size do
+			var n = vals.size - t
+			for i=0,n do
+				ac(t) = ac(t) + [iprod(`(vals(i) - me), `(vals(i+t) - me))]
+			end
+			if n > 0 then
+				ac(t) = ac(t) / (n * v)
+			end
+		end
+	in
+		ac
+	end
+end)
+
+-- Write autocorrelations to a CSV for later analysis
+local terra saveAutocorrelation(ac: &Vector(double), filename: rawstring)
+	var f = C.fopen(filename, "w")
+	C.fprintf(f, "lag,autocorrelation\n")
+	for i=0,ac.size do
+		C.fprintf(f, "%d,%g\n", i, ac(i))
+	end
+	C.fclose(f)
+end
+
+-- Extract just the values from a set of samples
+local sampleValues = macro(function(samps)
+	local SampVectorType = samps:gettype()
+	if SampVectorType:ispointer() then SampVectorType = SampVectorType.type end
+	local SampType = SampVectorType.ValueType
+	local ValType = SampType.ValueType
+	local VectorType = Vector(ValType)
+	return quote
+		var vals = VectorType.stackAlloc(samps.size)
+		for i=0,samps.size do vals(i) = samps(i).value end
+	in
+		vals
+	end
+end)
+
+
+-- Compute expectation over a vector of samples
+-- The value type must define + and scalar division
+local sampleExpectation = macro(function(samps)
+	return quote
+		var vals = sampleValues(samps)
+		var me = expectation(vals)
+		m.destruct(vals)
+	in
+		me
 	end
 end)
 
@@ -496,6 +585,12 @@ local function rejectionSample(computation)
 end
 
 
+-- Generally-useful utility for assembling factors
+local softeq = macro(function(actual, target, softness)
+	return `[rand.gaussian_logprob(actual:gettype())](actual, target, softness)
+end)
+
+
 return
 {
 	MCMCKernel = MCMCKernel,
@@ -513,9 +608,14 @@ return
 		mcmc = mcmc,
 		rejectionSample = rejectionSample,
 		sampleByRepeatedBurnin = sampleByRepeatedBurnin,
-		mean = mean,
 		expectation = expectation,
-		MAP = MAP
+		variance = variance,
+		autocorrelation = autocorrelation,
+		saveAutocorrelation = saveAutocorrelation,
+		sampleValues = sampleValues,
+		sampleExpectation = sampleExpectation,
+		MAP = MAP,
+		softeq = softeq
 	}
 }
 
