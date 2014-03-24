@@ -405,6 +405,16 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 				C.printf("stepSize: %g\n", self.stepSize)
 				C.printf("lp: %g\n", lp)
 				C.printf("H: %g\n", H)
+				C.printf("----------\n")
+				-- C.printf("Curr pos is:\n")
+				-- var xformed = [Vector(ad.num)].stackAlloc()
+				-- self.adTrace:getNonStructuralReals(&xformed)
+				-- for i=0,pos.size do
+				-- 	-- C.printf("%g\n", pos(i))
+				-- 	C.printf("%g\t%g\n", pos(i), ad.val(xformed(i)))
+				-- end
+				-- m.destruct(xformed)
+				-- C.printf("=============\n")
 			end end)]
 			m.destruct(pos)
 			pos = m.copy(self.positions)
@@ -418,12 +428,17 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			self:sampleNewMomenta(&mom)
 			lp = self:integratorStep(&pos, &mom, &grad, jacptr)
 			H = lp - lastlp
+			-- Fail if the latest step made the lp NaN
+			if not (lp == lp) then
+				util.fatalError("Bad posterior(?) - HMC step size search failed because logprob became nan\n")
+			end
 			-- If our initial step improved the posterior by more than 0.5, then
 			--    keep doubling step size until the initial step improves by as
 			--    close as possible to 0.5
 			-- If our initial step improved the posterior by less than 0.5, then
 			--    keep halving the step size until the initial step improves by
 			--    as close as possible to 0.5
+			-- If the step produced nans, then backtrack and terminate
 			if (direction == 1) and (H <= ad.math.log(0.5)) then
 				[util.optionally(verbosity > 2, function() return quote
 					C.printf("Terminated doubling search because H <= log(0.5). H = %g\n", H)
@@ -441,7 +456,7 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 			end
 			-- Check for divergence to infinity or collapse to zero.
 			if self.stepSize > 1e300 then
-				util.fatalError("Bad posterior - HMC step size search diverged to infinity.\n")
+				util.fatalError("Bad (flat?) posterior - HMC step size search diverged to infinity.\n")
 			end
 			if self.stepSize == 0 then
 				util.fatalError("Bad (discontinuous?) posterior - HMC step size search collapsed to zero.\n")

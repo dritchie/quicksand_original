@@ -224,8 +224,9 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 				var logit = logistic(x, self.boundShapeParam)
 				if x > [-math.huge] and logit == 0.0 then logit = 1e-15 end
 				if x < [math.huge] and logit == 1.0 then logit = [1.0 - 1e-15] end
+				var y = self.lowerBound + (self.upperBound - self.lowerBound) * logit
 			in
-				self.lowerBound + (self.upperBound - self.lowerBound) * logit
+				y
 			end
 		end)
 		inverseTransform = macro(function(self, y)
@@ -465,6 +466,9 @@ RandVarFromFunctions = templatize(function(scalarType, sampleTemplate, logprobTe
 	-- Update log probability
 	terra RandVarFromFunctionsT:updateLogprob() : {}
 		self.logprob = self:priorAdjustment(self.value) + logprobfn(self:forwardTransform(self.value), [genParamFieldsExpList(self)])
+		-- self.logprob = self:priorAdjustment(self.value)
+		-- self.logprob = logprobfn(self:forwardTransform(self.value), [genParamFieldsExpList(self)])
+		-- self.logprob = 0.0
 		self.hasChanges = false
 	end
 
