@@ -15,8 +15,10 @@ local util = terralib.require("util")
 local larj = terralib.require("prob.larj")
 local DualAverage = terralib.require("prob.dualAverage")
 local Grid2D = terralib.require("grid").Grid2D
-local linsolve = terralib.require("linsolve")
-local newton = terralib.require("newton")
+
+-- We'll load these if and only if CHMC is requested.
+local linsolve = nil
+local newton = nil
 
 local C = terralib.includecstring [[
 #include <stdio.h>
@@ -37,6 +39,11 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 	local sqrtTemperingMult = math.sqrt(tempTrajectoryMult)
 	local doingPMR = pmrAlpha > 0.0
 	local targetAcceptRate = (numSteps == 1) and 0.57 or 0.65
+
+	if constrainToManifold then
+		linsolve = terralib.require("linsolve")
+		newton = terralib.require("newton")
+	end
 
 	local struct HMCKernelT
 	{
