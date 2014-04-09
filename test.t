@@ -673,6 +673,28 @@ local terra doTests()
 	end,
 	0.75)]
 
+	[mhtest(
+	"gaussian factor",
+	function()
+		return terra() : double
+			var x = gaussian(0.0, 0.5, {structural=maybenot(), hasPrior=false})
+			factor([rand.gaussian_logprob(double)](x, 0.0, 0.5))
+			return x
+		end
+	end,
+	0.0)]
+	[mhtest(
+	"gaussian factorfn",
+	function()
+		local gaussfactor = factorfn(terra(x: double) return [rand.gaussian_logprob(double)](x, 0.0, 0.5) end)
+		return terra() : double
+			var x = gaussian(0.0, 0.5, {structural=maybenot(), hasPrior=false})
+			gaussfactor(x)
+			return x
+		end
+	end,
+	0.0)]
+
 	[hmctest(
 	"gaussian query (HMC)",
 	function()

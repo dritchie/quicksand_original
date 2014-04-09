@@ -700,6 +700,30 @@ local factor = spec.specializable(function(...)
 	end)
 end)
 
+-- Take a Terra function or macro, and wrap it in code that executes it,
+--    grabs its return value, and treats that as a factor.
+-- Nice for encapsulating really big factor computations (we'll skip calling these
+--    functions entirely if 'factorEval' is false)
+local factorfn = spec.specializable(function(...)
+	local scalarType = spec.paramFromList("scalarType", ...)
+	local factorEval = spec.getRuntimeVar("factorEval")
+	local doingInference = spec.getRuntimeVar("doingInference")
+	local globTrace = globalTrace(scalarType)
+	return function(fn)
+		return macro(function(...)
+			local args = {...}
+			return quote
+				if doingInference and factorEval then
+					var f = fn([args])
+					[util.assertIsType(scalarType,
+						string.format("factorfn must return value of type %s", scalarType))](f)
+					globTrace:factor(f)
+				end
+			end
+		end)
+	end
+end)
+
 local manifold = spec.specializable(function(...)
 	local scalarType = spec.paramFromList("scalarType", ...)
 	local factorEval = spec.getRuntimeVar("factorEval")
@@ -746,6 +770,7 @@ return
 		pmethod = pmethod,
 		pfor = pfor,
 		factor = factor,
+		factorfn = factorfn,
 		manifold = manifold,
 		condition = condition
 	}
