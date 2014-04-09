@@ -51,10 +51,11 @@ local function fwdtest(name, computation, trueExpectation)
 end
 
 local function mhtest(name, computation, trueExpectation)
+	local domcmc = mcmc(computation, RandomWalk(), {numsamps=numsamps, lag=lag, verbose=false})
 	return quote
 		var estimates = [Vector(double)].stackAlloc()
 		for run=0,runs do
-			var samps = [mcmc(computation, RandomWalk(), {numsamps=numsamps, lag=lag, verbose=false})]
+			var samps = domcmc()
 			estimates:push(sampleExpectation(&samps))
 			m.destruct(samps)
 		end
@@ -65,10 +66,11 @@ end
 
 local function larjtest(name, computation, trueExpectation)
 	local kernel = LARJ(RandomWalk({structs=false}))({intervals=larjAnnealSteps})
+	local domcmc = mcmc(computation, kernel, {numsamps=numsamps, lag=lag, verbose=false})
 	return quote
 		var estimates = [Vector(double)].stackAlloc()
 		for run=0,runs do
-			var samps = [mcmc(computation, kernel, {numsamps=numsamps, lag=lag, verbose=false})]
+			var samps = domcmc()
 			estimates:push(sampleExpectation(&samps))
 			m.destruct(samps)
 		end
@@ -77,25 +79,13 @@ local function larjtest(name, computation, trueExpectation)
 	end
 end
 
--- local function adtest(name, computation, trueExpectation)
--- 	return quote
--- 		var estimates = [Vector(double)].stackAlloc()
--- 		for run=0,runs do
--- 			var samps = [mcmc(computation, ADRandomWalk(), {numsamps=numsamps, lag=lag, verbose=false})]
--- 			estimates:push(sampleExpectation(&samps))
--- 			m.destruct(samps)
--- 		end
--- 		test(name, &estimates, trueExpectation)
--- 		m.destruct(estimates)
--- 	end
--- end
-
 local function hmctest(name, computation, trueExpectation, numSteps, stepSize)
 	numSteps = numSteps or 1
+	local domcmc = mcmc(computation, HMC({numSteps=numSteps}), {numsamps=numsamps, lag=lag, verbose=false})
 	return quote
 		var estimates = [Vector(double)].stackAlloc()
 		for run=0,runs do
-			var samps = [mcmc(computation, HMC({numSteps=numSteps}), {numsamps=numsamps, lag=lag, verbose=false})]
+			var samps = domcmc()
 			estimates:push(sampleExpectation(&samps))
 			m.destruct(samps)
 		end
@@ -668,15 +658,6 @@ local terra doTests()
 		end
 	end,
 	0.75)]
-
-	-- [adtest(
-	-- "gaussian query (with AD dual nums)",
-	-- function()
-	-- 	return terra() : real
-	-- 		return gaussian(0.1, 0.5, {structural=maybenot()})
-	-- 	end		
-	-- end,
-	-- 0.1)]
 
 	[hmctest(
 	"gaussian query (HMC)",

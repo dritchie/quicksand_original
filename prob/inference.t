@@ -49,7 +49,6 @@ local RandomWalkKernel = templatize(function(structs, nonstructs)
 	inheritance.virtual(RandomWalkKernelT, "__destruct")
 
 	terra RandomWalkKernelT:next(currTrace: &BaseTraceD) : &BaseTraceD
-		self.proposalsMade = self.proposalsMade + 1
 		var nextTrace = currTrace
 		var numvars = currTrace:numFreeVars(structs, nonstructs)
 		-- If there are no free variables, then simply run the computation
@@ -58,6 +57,7 @@ local RandomWalkKernel = templatize(function(structs, nonstructs)
 			[trace.traceUpdate()](currTrace)
 		-- Otherwise, do an MH proposal
 		else
+			self.proposalsMade = self.proposalsMade + 1
 			nextTrace = currTrace:deepcopy()
 			var freevars = nextTrace:freeVars(structs, nonstructs)
 			-- Select variable uniformly at random
@@ -354,7 +354,7 @@ end
 -- Draw unconditioned prior samples from computation by just running it
 --    (i.e. not even creating any traces)
 local function forwardSample(computation, numsamps)
-	computation = spec.probcomp(computation)
+	computation = spec.ensureProbComp(computation)
 	local comp = computation()
 	local terra fn()
 		var samps = [SampleVectorType(computation)].stackAlloc()
@@ -407,7 +407,7 @@ end
 --    and returning the list of resulting samples
 local function mcmc(computation, kernelgen, params)
 	computation = spec.ensureProbComp(computation)
-	local terra domcmc()
+	return terra()
 		var currTrace : &BaseTraceD = [trace.newTrace(computation)]
 		var kernel = [kernelgen()]
 		var samps = [SampleVectorType(computation)].stackAlloc()
@@ -416,7 +416,6 @@ local function mcmc(computation, kernelgen, params)
 		m.delete(currTrace)
 		return samps
 	end
-	return `domcmc()
 end
 
 -- Compute the mean of a vector of values
@@ -574,7 +573,7 @@ end
 
 -- Draw a sample from a computation via rejection
 local function rejectionSample(computation)
-	computation = spec.probcomp(computation)
+	computation = spec.ensureProbComp(computation)
 	return quote
 		var tr = [trace.newTrace(computation)]
 		var retval = m.copy(tr.returnValue)
@@ -605,6 +604,9 @@ return
 		GaussianDrift = GaussianDrift,
 		Schedule = Schedule,
 		forwardSample = forwardSample,
+		ReturnType = ReturnType,
+		SampleType = SampleType,
+		SampleVectorType = SampleVectorType,
 		mcmc = mcmc,
 		rejectionSample = rejectionSample,
 		sampleByRepeatedBurnin = sampleByRepeatedBurnin,

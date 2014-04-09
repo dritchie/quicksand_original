@@ -3,12 +3,51 @@ local rand = terralib.require("prob.random")
 
 ----------------------------------
 -- Specialization parameters and their defaults
-spec.addParam("computation", spec.probcomp(function() error("Specialization parameter 'computation' is not defined") end))
-spec.addParam("structureChange", true)
-spec.addParam("factorEval", true)
-spec.addParam("doingInference", false)
-spec.addParam("scalarType", double)
-spec.addParam("relaxManifolds", false)
+
+-- Compile-time params
+-- IMPORTANT: Don't add any more. Otherwise, we start getting lots of incompatible types, and that makes
+--    programming really gnarly.
+spec.addParam({
+	name = "computation",
+	stage = "Compile",
+	default = spec.probcomp(function() error("Specialization parameter 'computation' is not defined") end)
+})
+spec.addParam({
+	name = "scalarType",
+	stage = "Compile",
+	default = double
+})
+
+-- Runtime params
+spec.addParam({
+	name = "doingInference",
+	stage = "Runtime",
+	type = bool,
+	default = false
+})
+spec.addParam({
+	name = "factorEval",
+	stage = "Runtime",
+	type = bool,
+	default = true
+})
+spec.addParam({
+	name = "structureChange",
+	stage = "Runtime",
+	type = bool,
+	default = true
+})
+spec.addParam({
+	name = "relaxManifolds",
+	stage = "Runtime",
+	type = bool,
+	default = false
+})
+
+local terra setRuntimeDefaults()
+	[spec.genSetRuntimeVars()]
+end
+setRuntimeDefaults()
 -----------------------------------
 
 -- Add all the 'global' exports from the module named 'name'
@@ -41,5 +80,9 @@ processModules("erph",
 			   "hmc",
 			   "specialize")
 
--- Seed the random sampler
+-- Seed the random number generator
 rand.initrand()
+
+
+
+

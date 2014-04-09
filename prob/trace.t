@@ -49,76 +49,73 @@ local function isValidProbFn(fn)
 	end
 end
 local nextid = 0
-local pfn = spec.specializable(function(...)
-	local structureChange = spec.paramFromList("structureChange", ...)
-	local doingInference = spec.paramFromList("doingInference", ...)
-	return function(fn, opts)
-		local ismethod = opts and opts.ismethod
-		local data = { definition = fn }
-		local ret = macro(function(...)
-			local args = {...}
-			local argtypes = {}
-			for _,a in ipairs(args) do table.insert(argtypes, a:gettype()) end
-			-- If the function being wrapped is a method, and the first argument is not already
-			--    a pointer type, convert it to a pointer (this is the 'self' argument)
-			if ismethod and (not argtypes[1]:ispointertostruct()) then
-				args[1] = `&[args[1]]
-				argtypes[1] = &argtypes[1]
-			end
-			-- If we're compiling a specialization with no structure change, or if we're running
-			--    the code outside of an inference engine, then don't do any address tracking
-			if not doingInference or not structureChange then
-				return `[data.definition]([args])
-			end
-			local argintermediates = {}
-			for _,t in ipairs(argtypes) do table.insert(argintermediates, symbol(t)) end
-			-- Does the function have an explicitly annotated return type?
-			local success, typ = data.definition:peektype()
-			-- If not, attempt to compile to determine the type
-			if not success then typ = data.definition:gettype(true) end
-			-- If this fails (asynchronous gettype returns nil), then we know we must have
-			--    a recursive dependency.
-			if not typ then
-				error("Recursive probabilistic functions must have explicitly annotated return types.")
-			else
-				-- Every call gets a unique id
-				local myid = nextid
-				nextid = nextid + 1
-				-- Generate code!
-				isValidProbFn(data.definition)
-				return quote
+local function pfn(fn, opts)
+	local structureChange = spec.getRuntimeVar("structureChange")
+	local doingInference = spec.getRuntimeVar("doingInference")
+	local ismethod = opts and opts.ismethod
+	local data = { definition = fn }
+	local ret = macro(function(...)
+		local args = {...}
+		local argtypes = {}
+		for _,a in ipairs(args) do table.insert(argtypes, a:gettype()) end
+		-- If the function being wrapped is a method, and the first argument is not already
+		--    a pointer type, convert it to a pointer (this is the 'self' argument)
+		if ismethod and (not argtypes[1]:ispointertostruct()) then
+			args[1] = `&[args[1]]
+			argtypes[1] = &argtypes[1]
+		end
+		local argintermediates = {}
+		for _,t in ipairs(argtypes) do table.insert(argintermediates, symbol(t)) end
+		-- Does the function have an explicitly annotated return type?
+		local success, typ = data.definition:peektype()
+		-- If not, attempt to compile to determine the type
+		if not success then typ = data.definition:gettype(true) end
+		-- If this fails (asynchronous gettype returns nil), then we know we must have
+		--    a recursive dependency.
+		if not typ then
+			error("Recursive probabilistic functions must have explicitly annotated return types.")
+		else
+			-- Every call gets a unique id
+			local myid = nextid
+			nextid = nextid + 1
+			-- Generate code!
+			isValidProbFn(data.definition)
+			return quote
+				var result : typ.returntype
+				-- If we're guaranteed no structure change, or if we're running the code outside 
+				--    of an inference engine, then don't do any address tracking.
+				if not doingInference or not structureChange then
+					result = [data.definition]([args])
+				-- Otherwise, do stack-based address tracking
+				else
 					var [argintermediates] = [args]
 					callsiteStack:push(myid)
-					var result = [data.definition]([argintermediates])
+					result = [data.definition]([argintermediates])
 					callsiteStack:pop()
-				in
-					result
 				end
+			in
+				result
 			end
-		end)
-		-- Provide mechanisms for the function to be defined after it has been declared
-		-- This essentially provides a 'fix' operator for defining recursive functions.
-		ret.data = data
-		ret.define = function(self, fn)
-			self.data.definition = fn
 		end
-		-- Allow this macro to masquerade as a Terra function
-		ret.getdefinitions = function(self) return self.data.definition:getdefinitions() end
-		ret.gettype = function(self, async) return self.data.definition:gettype(async) end
-		ret.peektype = function(self) return self.data.definition:peektype() end
-		return ret
+	end)
+	-- Provide mechanisms for the function to be defined after it has been declared
+	-- This essentially provides a 'fix' operator for defining recursive functions.
+	ret.data = data
+	ret.define = function(self, fn)
+		self.data.definition = fn
 	end
-end)
+	-- Allow this macro to masquerade as a Terra function
+	ret.getdefinitions = function(self) return self.data.definition:getdefinitions() end
+	ret.gettype = function(self, async) return self.data.definition:gettype(async) end
+	ret.peektype = function(self) return self.data.definition:peektype() end
+	return ret
+end
 
-local pmethod = spec.specializable(function(...)
-	local paramTable = spec.paramListToTable(...)
-	local pfnspec = pfn(paramTable)
-	return function(fn, opts)
-		opts = opts or {}
-		opts.ismethod = true
-		return pfnspec(fn, opts)
-	end
-end)
+local function pmethod(fn, opts)
+	opts = opts or {}
+	opts.ismethod = true
+	return pfn(fn, opts)
+end
 
 
 
@@ -247,7 +244,6 @@ local function traceUpdate(paramTable)
 		-- ProbType is the first template parameter
 		local ProbType = TraceType.__templateParams[1]
 		paramTable.scalarType = ProbType
-		-- return `[traceUpdateImpl(ProbType)(unpack(spec.paramTableToList(paramTable)))](inst)
 		return `[BaseTrace(ProbType).traceUpdate(unpack(spec.paramTableToList(paramTable)))](inst)
 	end)
 end
@@ -487,7 +483,9 @@ RandExecTrace = templatize(function(ProbType, computation)
 
 	-- Generate specialized 'traceUpdate' code
 	virtualTemplate(Trace, "traceUpdate", function(...) return {}->{} end, function(...)
-		local structureChange = spec.paramFromList("structureChange",...)
+		-- Normally, structureChange is a runtime variable. But it's ok to access it at compile time in this case,
+		--   since we are compiling traceUpdate, not the computation itself.
+		local structureChange = spec.paramFromList("structureChange", ...)
 		local speccomp = computation(spec.paramListToTable(...))
 		local globTrace = globalTrace(ProbType)
 		assert(ProbType == spec.paramFromList("scalarType", ...)) --Just checking
@@ -505,12 +503,11 @@ RandExecTrace = templatize(function(ProbType, computation)
 			self.manifolds:clear()
 
 			-- Clear out the flat var list so we can properly refill it
-			[structureChange and (`self.varlist:clear()) or (quote end)]
+			if structureChange then self.varlist:clear() end
 
 			-- Mark all variables as inactive; only those reached by the computation
 			-- will become active
-			[structureChange and 
-			quote
+			if structureChange then
 				var it = self.vars:iterator()
 				[util.foreach(it, quote
 					var vlistp = it:valPointer()
@@ -519,8 +516,6 @@ RandExecTrace = templatize(function(ProbType, computation)
 					end
 				end)]
 			end
-				or
-			quote end]
 
 			-- Run computation
 			if self.hasReturnValue then m.destruct(self.returnValue) end
@@ -532,8 +527,7 @@ RandExecTrace = templatize(function(ProbType, computation)
 			self.lastVarList = nil
 
 			-- Clear out any random variables that are no longer reachable
-			[structureChange and
-			quote
+			if structureChange then
 				var it = self.vars:iterator()
 				[util.foreach(it, quote
 					var vlistp = it:valPointer()
@@ -551,8 +545,6 @@ RandExecTrace = templatize(function(ProbType, computation)
 					end
 				end)]
 			end
-				or
-			quote end]
 
 			-- Reset the global trace data
 			globTrace = prevtrace
@@ -638,72 +630,69 @@ local function lookupVariableValueNonStructural(RandVarType, opstruct, OpstructT
 end
 
 local function lookupVariableValue(RandVarType, opstruct, OpstructType, params, specParams)
-	local doingInference = spec.paramFromTable("doingInference", specParams)
-	-- If we're not running in an inference engine, then just return the value directly.
-	if not doingInference then
-		return (erp.opts.getCondVal(opstruct, OpstructType) or (`RandVarType.sample([params])))
-	end
-	-- Otherwise, the algorithm for variable lookup depends on whether the program control
-	--    structure is fixed or variable.
-	local structureChange = spec.paramFromTable("structureChange", specParams)
-	if structureChange then
-		return lookupVariableValueStructural(RandVarType, opstruct, OpstructType, params, specParams)
-	else
-		return lookupVariableValueNonStructural(RandVarType, opstruct, OpstructType, params, specParams)
+	local doingInference = spec.getRuntimeVar("doingInference")
+	local structureChange = spec.getRuntimeVar("structureChange")
+	return quote
+		var result : RandVarType.ValType
+		-- If we're not running in an inference engine, then just return the value directly.
+		if not doingInference then
+			result = [(erp.opts.getCondVal(opstruct, OpstructType) or (`RandVarType.sample([params])))]
+		else
+			-- Otherwise, the algorithm for variable lookup depends on whether the program control
+			--    structure is fixed or variable.
+			if structureChange then
+				result = [lookupVariableValueStructural(RandVarType, opstruct, OpstructType, params, specParams)]
+			else
+				result = [lookupVariableValueNonStructural(RandVarType, opstruct, OpstructType, params, specParams)]
+			end
+		end
+	in
+		result
 	end
 end
 
 local factor = spec.specializable(function(...)
-	local factorEval = spec.paramFromList("factorEval", ...)
-	local doingInference = spec.paramFromList("doingInference", ...)
 	local scalarType = spec.paramFromList("scalarType", ...)
+	local factorEval = spec.getRuntimeVar("factorEval")
+	local doingInference = spec.getRuntimeVar("doingInference")
 	local globTrace = globalTrace(scalarType)
 	return macro(function(num)
-		-- Do not generate any code if we're compiling a specialization
-		--    without factor evaluation, or if we're running the code outside of
-		--    an inference engine
-		if not doingInference or not factorEval then
-			return quote end
+		return quote
+			if doingInference and factorEval then
+				globTrace:factor(num)
+			end
 		end
-		return `globTrace:factor(num)
 	end)
 end)
 
 local manifold = spec.specializable(function(...)
-	local factorEval = spec.paramFromList("factorEval", ...)
-	local doingInference = spec.paramFromList("doingInference", ...)
 	local scalarType = spec.paramFromList("scalarType", ...)
-	local relaxManifolds = spec.paramFromList("relaxManifolds", ...)
+	local factorEval = spec.getRuntimeVar("factorEval")
+	local doingInference = spec.getRuntimeVar("doingInference")
+	local relaxManifolds = spec.getRuntimeVar("relaxManifolds")
 	local globTrace = globalTrace(scalarType)
 	return macro(function(num, softness)
-		-- Do not generate any code if we're compiling a specialization
-		--    without factor evaluation, or if we're running the code outside of
-		--    an inference engine
-		if not doingInference or not factorEval then
-			return quote end
-		end
-		-- Otherwise, what we do depends on whether we're relaxing
-		--    manifolds or not.
-		if relaxManifolds then
-			if not softness then
-				error("Need to provide softness parameter for manifold relaxation")
-			else
-				return `globTrace:factor([rand.gaussian_logprob(scalarType)](num, 0.0, softness))
+		return quote
+			if doingInference and factorEval then
+				if relaxManifolds then
+					globTrace:factor([rand.gaussian_logprob(scalarType)](num, 0.0, softness))
+				else
+					globTrace:manifold(num)
+				end
 			end
-		else
-			return `globTrace:manifold(num)
 		end
 	end)
 end)
 
 local condition = spec.specializable(function(...)
-	local doingInference = spec.paramFromList("doingInference", ...)
+	local doingInference = spec.getRuntimeVar("doingInference")
 	local globTrace = globalTrace(spec.paramFromList("scalarType", ...))
 	return macro(function(pred)
-		if not doingInference then
-			return quote end
+		return quote
+			if doingInference then
+				globTrace:condition(pred)
+			end
 		end
-		return `globTrace:condition(pred)
 	end)
 end)
 

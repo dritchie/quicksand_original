@@ -558,6 +558,7 @@ local function createRandVarFromCallsite(scalarType, sample, logprobfn, propose,
 	RandVarFromCallsiteT.paramTypes = {...}
 	local ParentClass = RandVarFromFunctions(scalarType, sample, logprobfn, propose, OpstructType, ...)
 	inheritance.dynamicExtend(ParentClass, RandVarFromCallsiteT)
+	RandVarFromCallsiteT.ValType = ParentClass.ValType
 
 	-- The only extra functionality provided by this subclass is deepcopy.
 	-- We need to know exactly which ERP type to copy into, which requires knowledge of
@@ -646,7 +647,7 @@ local function makeERP(sample, logprobfn, propose)
 				return [trace.lookupVariableValue(RandVarType, `optionStruct, OpstructType, paramsyms, specParams)]
 			end
 			-- The ERP must push an ID to the callsite stack.
-			erpfn = trace.pfn(specParams)(erpfn)
+			erpfn = trace.pfn(erpfn)
 			-- Generate call to function
 			return `erpfn(opstruct, [params])
 		end)
