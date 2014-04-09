@@ -117,6 +117,41 @@ local function pmethod(fn, opts)
 	return pfn(fn, opts)
 end
 
+-- pfor is like a for loop wrapped in its own function block.
+-- Namely, it pushes/pops the address stack, so that the structure
+--    of nested for loops is preserved.
+-- Arguments are one of:
+--   * indexVar, lower, upper, quoteBlock
+--   * indexVar, lower, upper, step, quoteBlock
+local function pfor(...)
+	local indexVar, lower, upper, step, quoteBlock
+	local numArgs = select("#", ...)
+	if numArgs == 5 then
+		indexVar = (select(1, ...))
+		lower = (select(2, ...))
+		upper = (select(3, ...))
+		step = (select(4, ...))
+		quoteBlock = (select(5, ...))
+	elseif numArgs == 4 then
+		indexVar = (select(1, ...))
+		lower = (select(2, ...))
+		upper = (select(3, ...))
+		step = 1
+		quoteBlock = (select(4, ...))
+	else
+		error(string.format("Unexpected number of arguments to pfor -- got %u, expected 4 or 5", numArgs))
+	end
+	local myid = nextid
+	nextid = nextid	+ 1
+	return quote
+		callsiteStack:push(myid)
+		for i=lower,upper,step do
+			indexVar = i
+			[quoteBlock]
+		end
+		callsiteStack:pop()
+	end
+end
 
 
 
@@ -709,6 +744,7 @@ return
 	globals = {
 		pfn = pfn,
 		pmethod = pmethod,
+		pfor = pfor,
 		factor = factor,
 		manifold = manifold,
 		condition = condition

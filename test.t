@@ -643,6 +643,20 @@ local terra doTests()
 	0.5)]
 
 	[mhtest(
+	"native loop w/ pfor",
+	function()
+		return terra() : double
+			var accum = 0
+			var i = 0
+			[pfor(i, 0, 4, quote
+				accum = accum + int(flip(0.5, {structural=maybenot()}))
+			end)]
+			return accum / 4.0
+		end
+	end,
+	0.5)]
+
+	[mhtest(
 	"directly conditioning variable value",
 	function()
 		return terra() : double
@@ -667,7 +681,6 @@ local terra doTests()
 		end		
 	end,
 	0.1)]
-
 
 	var t2 = util.currentTimeInSeconds()
 
