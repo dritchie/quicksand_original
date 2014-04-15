@@ -356,7 +356,7 @@ end
 local function forwardSample(computation, numsamps)
 	computation = spec.ensureProbComp(computation)
 	local comp = computation()
-	local terra fn()
+	return terra()
 		var samps = [SampleVectorType(computation)].stackAlloc()
 		for i=0,numsamps do
 			var retval = comp()
@@ -365,7 +365,6 @@ local function forwardSample(computation, numsamps)
 		end
 		return samps
 	end
-	return `fn()
 end
 
 
