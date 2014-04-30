@@ -159,6 +159,7 @@ local GaussianDriftKernel = templatize(function(bandwidth)
 		for i=0,freevars.size do
 			freevars(i):setRealComponents(&realcomps, &index)
 		end
+		m.destruct(realcomps)
 		[trace.traceUpdate({structureChange=false})](nextTrace)
 		var acceptThresh = (nextTrace.logprob - currTrace.logprob)/currTrace.temperature
 		if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
@@ -360,8 +361,9 @@ local function forwardSample(computation, numsamps)
 		var samps = [SampleVectorType(computation)].stackAlloc()
 		for i=0,numsamps do
 			var retval = comp()
-			samps:push([SampleType(computation)].stackAlloc(retval, 0.0))
-			m.destruct(retval)
+			var samp = [SampleType(computation)].stackAlloc(retval, 0.0)
+			samps:push(samp)
+			m.destruct(samp)
 		end
 		return samps
 	end
@@ -389,7 +391,10 @@ local function mcmcSample(computation, params)
 			currTrace = kernel:next(currTrace)
 			if samples ~= nil and i % lag == 0 and i >= burnin then
 				var derivedTrace = [&RandExecTrace(double, computation)](currTrace)
-				samples:push([SampleType(computation)].stackAlloc(derivedTrace.returnValue, derivedTrace.logprob))
+				var si = samples.size
+				samples:resize(si+1)
+				samples(si).value = m.copy(derivedTrace.returnValue)
+				samples(si).logprob = derivedTrace.logprob
 			end
 		end
 		if verbose then
