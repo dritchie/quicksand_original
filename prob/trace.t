@@ -322,26 +322,25 @@ GlobalTrace = templatize(function(ProbType)
 			[ParentClass.__templatecopy(P)](self, other)
 			-- Copy vars
 			var old2new = [HashMap(&RVarP, &RVar)].stackAlloc()
-			--    First copy the name --> var map
+			-- First copy the name --> var map
 			var it = other.vars:iterator()
 			[util.foreach(it, quote
 				var k, v = it:keyvalPointer()
 				var vlistp, didGet = self.vars:getOrCreatePointer(@k)
 				for i=0,v.size do
-					var oldvar = v:get(i)
+					var oldvar = v(i)
 					var newvar = [RVarP.deepcopy(ProbType)](oldvar)
 					old2new:put(oldvar, newvar)
 					vlistp:push(newvar)
 				end
 			end)]
-			--   Then copy the flat var list
+			-- Then copy the flat var list
 			self.varlist:resize(other.varlist.size)
 			for i=0,other.varlist.size do
-				self.varlist:set(i, @(old2new:getPointer(other.varlist:get(i))))
+				self.varlist(i) = old2new(other.varlist(i))
 			end
 			m.destruct(old2new)
 			-- Copy manifolds (if any)
-			m.init(self.manifolds)
 			self.manifolds:resize(other.manifolds.size)
 			for i=0,other.manifolds.size do
 				self.manifolds(i) = other.manifolds(i)
@@ -351,6 +350,7 @@ GlobalTrace = templatize(function(ProbType)
 
 	terra GlobalTraceT:__destruct() : {}
 		m.destruct(self.vars)
+		self.varlist:clearAndDelete()
 		m.destruct(self.varlist)
 		m.destruct(self.loopcounters)
 		m.destruct(self.manifolds)

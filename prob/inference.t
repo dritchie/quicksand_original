@@ -159,7 +159,6 @@ local GaussianDriftKernel = templatize(function(bandwidth)
 		for i=0,freevars.size do
 			freevars(i):setRealComponents(&realcomps, &index)
 		end
-		m.destruct(realcomps)
 		[trace.traceUpdate({structureChange=false})](nextTrace)
 		var acceptThresh = (nextTrace.logprob - currTrace.logprob)/currTrace.temperature
 		if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
@@ -169,6 +168,7 @@ local GaussianDriftKernel = templatize(function(bandwidth)
 			m.delete(nextTrace)
 			nextTrace = currTrace
 		end
+		m.destruct(realcomps)
 		m.destruct(freevars)
 		return nextTrace
 	end
