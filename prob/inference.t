@@ -116,7 +116,8 @@ end,
 
 
 -- Proposals to non-structural continuous random variables using Gaussian drift
-local GaussianDriftKernel = templatize(function(bandwidth)
+local gdTargetAcceptRate = 0.234
+local GaussianDriftKernel = templatize(function(bandwidth, bandwidthAdapt, adaptationRate)
 
 	local struct GaussianDriftKernelT
 	{
@@ -125,36 +126,109 @@ local GaussianDriftKernel = templatize(function(bandwidth)
 	}
 	inheritance.dynamicExtend(MCMCKernel, GaussianDriftKernelT)
 
-	-- 'bandwidth' can either be a constant number or a function that maps temperature
-	--    to bandwidth
-	local getBandwidth = macro(function(currTrace)
-		if type(bandwidth) == "function" then
-			return bandwidth(`currTrace.temperature)
+	-- If adaptation was requested, then we need a bandwidth and some other data per variable.
+	-- We also need to store the last trace we've seen, so we can know when we have to resize
+	--   our per-variable data.
+	if bandwidthAdapt then
+		GaussianDriftKernelT.entries:insert({field = "bandwidths", type = Vector(double)})
+		GaussianDriftKernelT.entries:insert({field = "propsPerVar", type = Vector(uint)})
+		GaussianDriftKernelT.entries:insert({field = "acceptsPerVar", type = Vector(uint)})
+		GaussianDriftKernelT.entries:insert({field = "lastTrace", type = &BaseTraceD})
+	end
+
+	terra GaussianDriftKernelT:__construct()
+		self.proposalsMade = 0
+		self.proposalsAccepted = 0
+		[util.optionally(bandwidthAdapt, quote
+			m.init(self.bandwidths)
+			m.init(self.propsPerVar)
+			m.init(self.acceptsPerVar)
+			self.lastTrace = nil
+		end)]
+	end
+
+	terra GaussianDriftKernelT:__destruct() : {}
+		[util.optionally(bandwidthAdapt, quote
+			m.destruct(self.bandwidths)
+			m.destruct(self.propsPerVar)
+			m.destruct(self.acceptsPerVar)
+		end)]
+	end
+	inheritance.virtual(GaussianDriftKernelT, "__destruct")
+
+	-- Retrieves correct bandwidth, whether we're adapting or not
+	GaussianDriftKernelT.methods.getBandwidth = macro(function(self, i)
+		if bandwidthAdapt then
+			return `self.bandwidths(i)
 		else
 			return bandwidth
 		end
 	end)
 
-	terra GaussianDriftKernelT:__construct()
-		self.proposalsMade = 0
-		self.proposalsAccepted = 0
-	end
+	-- Check if we need to resize our bandwidth / adapter vectors (which happens)
+	--    if we've never seen this trace before
+	-- I elect not to ever shrink these vectors; if the set of variables grows again,
+	--    the partially-adapted bandwidths stored there may be better than fresh ones.
+	GaussianDriftKernelT.methods.preprocess = macro(function(self, currTrace, nvarsnew)
+		if bandwidthAdapt then
+			return quote
+				if self.lastTrace ~= currTrace then
+					var nvarsold = self.bandwidths.size
+					if nvarsnew > nvarsold then
+						self.bandwidths:resize(nvarsnew)
+						self.propsPerVar:resize(nvarsnew)
+						self.acceptsPerVar:resize(nvarsnew)
+						for i=nvarsold,nvarsnew do
+							self.bandwidths(i) = bandwidth
+							self.propsPerVar(i) = 0
+							self.acceptsPerVar(i) = 0
+						end
+					end
+					self.lastTrace = currTrace
+				end
+			end
+		else
+			return quote end
+		end
+	end)
 
-	terra GaussianDriftKernelT:__destruct() : {} end
-	inheritance.virtual(GaussianDriftKernelT, "__destruct")
+	-- Adapt the bandwidth of the changed variable depending upon how the change went (code adapted from Stan)
+	-- If we accepted the change, then update self.lastTrace
+	GaussianDriftKernelT.methods.postprocess = macro(function(self, nextTrace, changedVarIndex, didAccept)
+		if bandwidthAdapt then
+			return quote
+				self.propsPerVar(changedVarIndex) = self.propsPerVar(changedVarIndex) + 1
+				if didAccept then
+					self.lastTrace = nextTrace
+					self.acceptsPerVar(changedVarIndex) = self.acceptsPerVar(changedVarIndex) + 1
+				end
+
+				var acceptRatio = self.acceptsPerVar(changedVarIndex) / double(self.propsPerVar(changedVarIndex))
+				if acceptRatio > gdTargetAcceptRate then
+					self.bandwidths(changedVarIndex) = adaptationRate*self.bandwidths(changedVarIndex)
+				else
+					self.bandwidths(changedVarIndex) = (1/adaptationRate)*self.bandwidths(changedVarIndex)
+				end
+			end
+		else
+			return quote end
+		end
+	end)
 
 	terra GaussianDriftKernelT:next(currTrace: &BaseTraceD) : &BaseTraceD
 		self.proposalsMade = self.proposalsMade + 1
 		var nextTrace = currTrace:deepcopy()
 		-- Grab the real components of all nonstructural variables
 		var freevars = nextTrace:freeVars(false, true)
+		self:preprocess(currTrace, freevars.size)
 		var realcomps = [Vector(double)].stackAlloc()
 		for i=0,freevars.size do
 			freevars(i):getRealComponents(&realcomps)
 		end
 		-- Choose a component at random, make a gaussian perturbation to it
 		var i = rand.uniformRandomInt(0, realcomps.size)
-		realcomps(i) = [rand.gaussian_sample(double)](realcomps(i), getBandwidth(currTrace))
+		var changedVarIndex = i
+		realcomps(i) = [rand.gaussian_sample(double)](realcomps(i), self:getBandwidth(i))
 		-- Re-run trace with new value, make accept/reject decision
 		var index = 0U
 		for i=0,freevars.size do
@@ -162,7 +236,8 @@ local GaussianDriftKernel = templatize(function(bandwidth)
 		end
 		[trace.traceUpdate({structureChange=false})](nextTrace)
 		var acceptThresh = (nextTrace.logprob - currTrace.logprob)/currTrace.temperature
-		if nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh then
+		var accepted = nextTrace.conditionsSatisfied and C.log(rand.random()) < acceptThresh
+		if accepted then
 			self.proposalsAccepted = self.proposalsAccepted + 1
 			m.delete(currTrace)
 		else
@@ -171,6 +246,9 @@ local GaussianDriftKernel = templatize(function(bandwidth)
 		end
 		m.destruct(realcomps)
 		m.destruct(freevars)
+
+		self:postprocess(nextTrace, changedVarIndex, accepted)
+
 		return nextTrace
 	end
 	inheritance.virtual(GaussianDriftKernelT, "next")
@@ -196,7 +274,7 @@ local GaussianDrift = util.fnWithDefaultArgs(function(...)
 	local GDType = GaussianDriftKernel(...)
 	return function() return `GDType.heapAlloc() end
 end,
-{{"bandwidth", 1.0}})
+{{"bandwidth", 1.0}, {"bandwidthAdapt", false}, {"adaptationRate", 1.01}})
 
 
 
