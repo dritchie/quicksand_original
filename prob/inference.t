@@ -16,7 +16,8 @@ local util = terralib.require("util")
 local C = terralib.includecstring [[
 #include <stdio.h>
 #include <math.h>
-inline void flush() { fflush(stdout); }
+inline FILE* getstderr() { return stderr; }
+inline void flushstderr() { fflush(stderr); }
 ]]
 
 
@@ -384,8 +385,8 @@ local function mcmcSample(computation, params)
 		var t0 = 0.0
 		for i=0,iters do
 			if verbose then
-				C.printf(" iteration: %d\r", i+1)
-				C.flush()
+				C.fprintf(C.getstderr(), " iteration: %d\r", i+1)
+				C.flushstderr()
 				if i == 1 then t0 = util.currentTimeInSeconds() end
 			end
 			currTrace = kernel:next(currTrace)
@@ -398,7 +399,7 @@ local function mcmcSample(computation, params)
 			end
 		end
 		if verbose then
-			C.printf("\n")
+			C.fprintf(C.getstderr(), "\n")
 			kernel:stats()
 			var t1 = util.currentTimeInSeconds()
 			C.printf("Time: %g\n", t1 - t0)
@@ -429,7 +430,9 @@ local expectation = macro(function(values)
 		var vals = values
 		var me = m.copy(vals(0))
 		for i=1,vals.size do
+			var oldme = me
 			me = me + vals(i)
+			m.destruct(oldme)
 		end
 	in
 		me / double(vals.size)
@@ -457,6 +460,7 @@ local variance = macro(function(values, mean)
 		for i=0,vals.size do
 			var diff = vals(i) - me
 			v = v + [iprod(diff, diff)]
+			m.destruct(diff)
 		end
 	in
 		v / vals.size
@@ -467,19 +471,20 @@ end)
 -- If optmean and optvar are not provided, use the
 --    mean and variance of vals
 local autocorrelation = macro(function(values, optmean, optvar)
-	local iprod = innerProd(values:gettype().ValueType)
+	local ValType = values:gettype().ValueType
+	local iprod = innerProd(ValType)
 	local computeMeanVar = optmean == nil or optvar == nil
 	return quote
 		var vals = values
 		-- Set up desired mean and variance
-		var me = vals(0)
+		var me : ValType
 		var v = 0.0
 		[util.optionally(computeMeanVar, function() return quote
 			me = expectation(vals)
 			v = variance(vals, me)
 		end end)]
 		[util.optionally(not computeMeanVar, function() return quote
-			me = optmean
+			me = m.copy(optmean)
 			v = optvar
 		end end)]
 		-- Compute autocorrelation
@@ -487,12 +492,17 @@ local autocorrelation = macro(function(values, optmean, optvar)
 		for t=0,vals.size do
 			var n = vals.size - t
 			for i=0,n do
-				ac(t) = ac(t) + [iprod(`(vals(i) - me), `(vals(i+t) - me))]
+				var tmp1 = vals(i) - me
+				var tmp2 = vals(i+t) - me
+				ac(t) = ac(t) + [iprod(tmp1, tmp2)]
+				m.destruct(tmp1)
+				m.destruct(tmp2)
 			end
 			if n > 0 then
 				ac(t) = ac(t) / (n * v)
 			end
 		end
+		m.destruct(me)
 	in
 		ac
 	end
