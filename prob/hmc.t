@@ -1,20 +1,20 @@
-local m = terralib.require("mem")
-local templatize = terralib.require("templatize")
-local inf = terralib.require("prob.inference")
+local m = require("mem")
+local templatize = require("templatize")
+local inf = require("prob.inference")
 local MCMCKernel = inf.MCMCKernel
-local inheritance = terralib.require("inheritance")
-local ad = terralib.require("ad")
-local trace = terralib.require("prob.trace")
+local inheritance = require("inheritance")
+local ad = require("ad")
+local trace = require("prob.trace")
 local BaseTraceD = trace.BaseTrace(double)
 local BaseTraceAD = trace.BaseTrace(ad.num)
-local erp = terralib.require("prob.erph")
+local erp = require("prob.erph")
 local RandVarAD = erp.RandVar(ad.num)
-local rand = terralib.require("prob.random")
-local Vector = terralib.require("vector")
-local util = terralib.require("util")
-local larj = terralib.require("prob.larj")
-local DualAverage = terralib.require("prob.dualAverage")
-local Grid2D = terralib.require("grid").Grid2D
+local rand = require("prob.random")
+local Vector = require("vector")
+local util = require("util")
+local larj = require("prob.larj")
+local DualAverage = require("prob.dualAverage")
+local Grid2D = require("grid").Grid2D
 
 -- We'll load these if and only if CHMC is requested.
 local linsolve = nil
@@ -41,8 +41,8 @@ local HMCKernel = templatize(function(stepSize, numSteps, usePrimalLP,
 	local targetAcceptRate = (numSteps == 1) and 0.57 or 0.65
 
 	if constrainToManifold then
-		linsolve = terralib.require("linsolve")
-		newton = terralib.require("newton")
+		linsolve = require("linsolve")
+		newton = require("newton")
 	end
 
 	local struct HMCKernelT

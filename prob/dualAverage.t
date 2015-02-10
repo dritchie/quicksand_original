@@ -1,5 +1,5 @@
-local m = terralib.require("mem")
-local ad = terralib.require("ad")
+local m = require("mem")
+local ad = require("ad")
 
 -- Univariate dual-averaging optimization (for HMC step size adaptation)
 -- Adapted from Stan

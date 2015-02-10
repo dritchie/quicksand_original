@@ -1,21 +1,21 @@
-local inheritance = terralib.require("inheritance")
-local templatize = terralib.require("templatize")
-local virtualTemplate = terralib.require("vtemplate")
-local trace = terralib.require("prob.trace")
+local inheritance = require("inheritance")
+local templatize = require("templatize")
+local virtualTemplate = require("vtemplate")
+local trace = require("prob.trace")
 local BaseTrace = trace.BaseTrace
 local BaseTraceD = BaseTrace(double)
 local GlobalTrace = trace.GlobalTrace
-local m = terralib.require("mem")
-local erp = terralib.require("prob.erph")
+local m = require("mem")
+local erp = require("prob.erph")
 local RandVar = erp.RandVar
-local util = terralib.require("util")
-local spec = terralib.require("prob.specialize")
-local inf = terralib.require("prob.inference")
+local util = require("util")
+local spec = require("prob.specialize")
+local inf = require("prob.inference")
 local MCMCKernel = inf.MCMCKernel
-local Vector = terralib.require("vector")
-local rand = terralib.require("prob.random")
-local ad = terralib.require("ad")
-local DualAverage = terralib.require("prob.dualAverage")
+local Vector = require("vector")
+local rand = require("prob.random")
+local ad = require("ad")
+local DualAverage = require("prob.dualAverage")
 
 local C = terralib.includecstring [[
 #include <math.h>

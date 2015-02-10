@@ -1,9 +1,9 @@
-local inheritance = terralib.require("inheritance")
-local templatize = terralib.require("templatize")
-local virtualTemplate = terralib.require("vtemplate")
-local ad = terralib.require("ad")
-local spec = terralib.require("prob.specialize")
-local Vector = terralib.require("vector")
+local inheritance = require("inheritance")
+local templatize = require("templatize")
+local virtualTemplate = require("vtemplate")
+local ad = require("ad")
+local spec = require("prob.specialize")
+local Vector = require("vector")
 
 local C = terralib.includecstring [[
 #include <stdio.h>

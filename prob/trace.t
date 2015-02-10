@@ -1,16 +1,16 @@
-local erp = terralib.require("prob.erph")
+local erp = require("prob.erph")
 local RandVar = erp.RandVar
-local util = terralib.require("util")
-local iface = terralib.require("interface")
-local Vector = terralib.require("vector")
-local HashMap = terralib.require("hashmap")
-local templatize = terralib.require("templatize")
-local virtualTemplate = terralib.require("vtemplate")
-local inheritance = terralib.require("inheritance")
-local m = terralib.require("mem")
-local rand = terralib.require("prob.random")
-local spec = terralib.require("prob.specialize")
-local ad = terralib.require("ad")
+local util = require("util")
+local iface = require("interface")
+local Vector = require("vector")
+local HashMap = require("hashmap")
+local templatize = require("templatize")
+local virtualTemplate = require("vtemplate")
+local inheritance = require("inheritance")
+local m = require("mem")
+local rand = require("prob.random")
+local spec = require("prob.specialize")
+local ad = require("ad")
 
 local C = terralib.includecstring [[
 #include <stdio.h>

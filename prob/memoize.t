@@ -1,8 +1,8 @@
-local m = terralib.require("mem")
-local templatize = terralib.require("templatize")
-local hash = terralib.require("hash")
-local HashMap = terralib.require("hashmap")
-local util = terralib.require("util")
+local m = require("mem")
+local templatize = require("templatize")
+local hash = require("hash")
+local HashMap = require("hashmap")
+local util = require("util")
 
 -- Generally useful helpers
 local function fields(inst, num)

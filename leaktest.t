@@ -1,7 +1,7 @@
-terralib.require("prob")
+require("prob")
 
-local Vector = terralib.require("vector")
-local AutoPtr = terralib.require("autopointer")
+local Vector = require("vector")
+local AutoPtr = require("autopointer")
 
 
 local comp = probcomp(function()

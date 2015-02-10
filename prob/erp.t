@@ -1,17 +1,17 @@
 
-local random = terralib.require("prob.random")
-local templatize = terralib.require("templatize")
-local virtualTemplate = terralib.require("vtemplate")
-local inheritance = terralib.require("inheritance")
-local Vector = terralib.require("vector")
-local m = terralib.require("mem")
-local util = terralib.require("util")
-local erph = terralib.require("prob.erph")
+local random = require("prob.random")
+local templatize = require("templatize")
+local virtualTemplate = require("vtemplate")
+local inheritance = require("inheritance")
+local Vector = require("vector")
+local m = require("mem")
+local util = require("util")
+local erph = require("prob.erph")
 local RandVar = erph.RandVar
 local typeToID = erph.typeToID
-local trace = terralib.require("prob.trace")
-local spec = terralib.require("prob.specialize")
-local ad = terralib.require("ad")
+local trace = require("prob.trace")
+local spec = require("prob.specialize")
+local ad = require("ad")
 
 local C = terralib.includec("stdio.h")
 

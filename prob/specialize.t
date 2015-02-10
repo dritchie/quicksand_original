@@ -1,5 +1,5 @@
-local templatize = terralib.require("templatize")
-local util = terralib.require("util")
+local templatize = require("templatize")
+local util = require("util")
 
 
 local currindex = 1

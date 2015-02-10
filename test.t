@@ -1,9 +1,9 @@
-local rand = terralib.require("prob.random")
-local inf = terralib.require("prob.inference")
-local m = terralib.require("mem")
-local Vector = terralib.require("vector")
-local util = terralib.require("util")
-terralib.require("prob")
+local rand = require("prob.random")
+local inf = require("prob.inference")
+local m = require("mem")
+local Vector = require("vector")
+local util = require("util")
+require("prob")
 
 local C = terralib.includecstring [[
 #include <stdio.h>
@@ -711,7 +711,7 @@ local terra doTests()
 
 end
 
--- local prof = terralib.require("/Users/dritchie/Git/terra/tests/lib/prof")
+-- local prof = require("/Users/dritchie/Git/terra/tests/lib/prof")
 doTests()
 -- prof.begin()
 doTests()

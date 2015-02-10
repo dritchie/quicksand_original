@@ -1,6 +1,6 @@
 local C = terralib.includec("stdio.h")
-local Vector = terralib.require("vector")
-local m = terralib.require("mem")
+local Vector = require("vector")
+local m = require("mem")
 local ffi = require("ffi")
 
 local callsiteStack = global(Vector(int))

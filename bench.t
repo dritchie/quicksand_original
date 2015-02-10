@@ -1,5 +1,5 @@
-terralib.require("prob")
-local m = terralib.require("mem")
+require("prob")
+local m = require("mem")
 
 
 local C = terralib.includecstring [[

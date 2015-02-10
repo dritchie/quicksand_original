@@ -1,5 +1,5 @@
-local spec = terralib.require("prob.specialize")
-local rand = terralib.require("prob.random")
+local spec = require("prob.specialize")
+local rand = require("prob.random")
 
 ----------------------------------
 -- Specialization parameters and their defaults
@@ -53,7 +53,7 @@ setRuntimeDefaults()
 -- Add all the 'global' exports from the module named 'name'
 --    to the global environment.
 local function processModule(name)
-	local mod = terralib.require(string.format("prob.%s", name))
+	local mod = require(string.format("prob.%s", name))
 	local globals = mod.globals
 	for k,v in pairs(globals) do
 		local val = v

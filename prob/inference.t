@@ -1,17 +1,17 @@
-local trace = terralib.require("prob.trace")
-local spec = terralib.require("prob.specialize")
+local trace = require("prob.trace")
+local spec = require("prob.specialize")
 local BaseTrace = trace.BaseTrace
 local BaseTraceD = BaseTrace(double)
 local RandExecTrace = trace.RandExecTrace
 local TraceWithRetVal = trace.TraceWithRetVal
-local inheritance = terralib.require("inheritance")
-local m = terralib.require("mem")
-local rand = terralib.require("prob.random")
-local templatize = terralib.require("templatize")
-local Vector = terralib.require("vector")
-local erp = terralib.require("prob.erph")
-local ad = terralib.require("ad")
-local util = terralib.require("util")
+local inheritance = require("inheritance")
+local m = require("mem")
+local rand = require("prob.random")
+local templatize = require("templatize")
+local Vector = require("vector")
+local erp = require("prob.erph")
+local ad = require("ad")
+local util = require("util")
 
 local C = terralib.includecstring [[
 #include <stdio.h>

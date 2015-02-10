@@ -1,13 +1,13 @@
-terralib.require("prob")
+require("prob")
 
-local m = terralib.require("mem")
-local Vector = terralib.require("vector")
-local trace = terralib.require("prob.trace")
-local inf = terralib.require("prob.inference")
-local newton = terralib.require("newton")
-local inheritance = terralib.require("inheritance")
-local util = terralib.require("util")
-local ad = terralib.require("ad")
+local m = require("mem")
+local Vector = require("vector")
+local trace = require("prob.trace")
+local inf = require("prob.inference")
+local newton = require("newton")
+local inheritance = require("inheritance")
+local util = require("util")
+local ad = require("ad")
 
 local C = terralib.includecstring [[
 #include <stdio.h>

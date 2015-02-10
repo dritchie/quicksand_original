@@ -1,5 +1,5 @@
-terralib.require("prob")
-local m = terralib.require("mem")
+require("prob")
+local m = require("mem")
 
 -- TEST 1: Use a type from a probmodule
 local function test1()

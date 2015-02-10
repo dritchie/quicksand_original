@@ -1,4 +1,4 @@
-terralib.require("prob")
+require("prob")
 
 
 local testcomp = probcomp(function()

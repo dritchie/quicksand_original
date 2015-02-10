@@ -1,9 +1,9 @@
 
-local util = terralib.require("util")
-local templatize = terralib.require("templatize")
-local Vector = terralib.require("vector")
-local ad = terralib.require("ad")
-local erph = terralib.require("prob.erph")
+local util = require("util")
+local templatize = require("templatize")
+local Vector = require("vector")
+local ad = require("ad")
+local erph = require("prob.erph")
 
 -- Base RNG
 local C = terralib.includecstring([[
